@@ -35,9 +35,22 @@ def chat(req: ChatRequest):
     if not GROQ_API_KEY:
         return {"text": "❌ GROQ_API_KEY non configurata sul server."}
 
-    payload = {
-        "model": MODEL,
-        "messages": [
+    messages = [
+    {
+        "role": "system",
+        "content": (
+            "Sei ChatAI Bob, un assistente AI professionale. "
+            "Rispondi SEMPRE in modo diretto, pratico e completo. "
+            "NON fare domande inutili. "
+            "Se l'utente chiede di scrivere un libro, INIZIA SUBITO a scriverlo. "
+            "Usa uno stile chiaro, naturale e strutturato."
+        )
+    },
+    {
+        "role": "user",
+        "content": req.message
+    }
+]
             {"role": "system", "content": "Rispondi in italiano, in modo chiaro e utile."},
             {"role": "user", "content": req.message}
         ],
