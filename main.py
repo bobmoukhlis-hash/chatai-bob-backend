@@ -11,11 +11,13 @@ def root():
     return {"status": "ok"}
 
 # 🔑 QUESTA ROUTE SERVE AL FRONTEND
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-        "reply": f"Hai scritto: {req.message}"
+fetch(API_BASE + "/health")
+  .then(r => r.json())
+  .then(d => {
+    if (d.status === "ok") {
+      setBackendOnline(true);
+    } else {
+      setBackendOnline(false);
     }
+  })
+  .catch(() => setBackendOnline(false));
