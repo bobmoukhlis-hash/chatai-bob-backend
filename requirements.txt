@@ -5,3 +5,8 @@ python-multipart
 pydantic
 pillow
 pypdf
+
+# OCR:
+easyocr
+pytesseract
+pdf2image
