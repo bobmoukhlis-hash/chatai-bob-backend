@@ -1,36 +1,42 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import requests, os
+from pydantic import BaseModel
+import os
+from groq import Groq
 
 app = FastAPI()
 
+# CORS (obbligatorio per GitHub Pages)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Groq client
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+class ChatRequest(BaseModel):
+    message: str
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 @app.post("/chat")
-def chat(data: dict):
-    r = requests.post(
-        GROQ_URL,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": data["message"]}],
-            "max_tokens": 400,
-        },
-        timeout=30,
-    )
-    return {"text": r.json()["choices"][0]["message"]["content"]}
+def chat(req: ChatRequest):
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": req.message}
+            ],
+        )
+        return {
+            "reply": completion.choices[0].message.content
+        }
+    except Exception as e:
+        return {"error": str(e)}
