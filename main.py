@@ -13,5 +13,5 @@ def root():
 @app.post("/chat")
 def chat(req: ChatRequest):
     return {
-        "text": f"Hai scritto: {req.message}"
+        "reply": f"Hai scritto: {req.message}"
     }
