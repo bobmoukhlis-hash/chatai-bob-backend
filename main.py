@@ -16,18 +16,18 @@ app.add_middleware(
 # ===== CONFIG =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL =MODEL = "llama-3.1-8b-instant"# ✅ MODELLO SICURO
+MODEL = "llama-3.1-8b-instant"  # ✅ MODELLO CORRETTO
 
 SYSTEM_PROMPT = """
 Sei ChatAI Bob, un assistente AI professionale.
 
-REGOLE:
-- Rispondi sempre in italiano
+REGOLE ASSOLUTE:
+- Rispondi SEMPRE in italiano
 - NON fare domande
 - NON chiedere chiarimenti
 - Se l'utente chiede di scrivere un libro, INIZIA SUBITO
 - Usa titoli, capitoli e struttura professionale
-- Risposte lunghe e complete
+- Risposte lunghe, complete e ben scritte
 """
 
 class ChatRequest(BaseModel):
@@ -52,8 +52,8 @@ def chat(req: ChatRequest):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": req.message}
         ],
-        "temperature": 0.8,
-        "max_tokens": 1200
+        "temperature": 0.9,
+        "max_tokens": 1500
     }
 
     headers = {
