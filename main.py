@@ -14,9 +14,8 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
-
-@app.post("/chat")
-def chat(req: ChatRequest):
-    return {
+@app.get("/health")
+def health():
+    return {"status": "ok"}
         "reply": f"Hai scritto: {req.message}"
     }
