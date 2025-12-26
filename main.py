@@ -3,17 +3,31 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
+
+# ================= SYSTEM PROMPT =================
 SYSTEM_PROMPT = """
-Sei ChatAI Bob, un assistente AI avanzato.
-Rispondi sempre in italiano.
-Scrivi risposte complete, senza chiedere chiarimenti.
-Se l’utente chiede di creare qualcosa (libro, storia, codice, testo),
-fallo immediatamente.
-Usa titoli, paragrafi e struttura professionale.
+Sei ChatAI Bob, un assistente AI professionale.
+
+REGOLE ASSOLUTE (NON VIOLABILI):
+- Rispondi SEMPRE in italiano
+- NON fare domande di chiarimento
+- NON chiedere dettagli aggiuntivi
+- NON dire frasi come "prima di iniziare", "potresti dirmi", "vorrei sapere"
+- Se l'utente chiede di scrivere un libro, una storia, un testo o codice:
+  INIZIA SUBITO A SCRIVERLO
+- Scegli TU genere, struttura e stile in modo professionale
+- Produci risposte LUNGHE, COMPLETE e BEN STRUTTURATE
+- Usa titoli, capitoli, paragrafi
+- Comportati come un autore esperto
+
+ESEMPIO OBBLIGATORIO:
+Utente: "Scrivi un libro"
+Risposta: inizi direttamente dal titolo e Capitolo 1, SENZA domande.
 """
+
+# ================= APP =================
 app = FastAPI()
 
-# CORS per GitHub Pages / App
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,14 +35,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===== CONFIG =====
+# ================= CONFIG =================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama3-70b-8192"
 
 class ChatRequest(BaseModel):
     message: str
 
+# ================= ROUTES =================
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -43,51 +58,13 @@ def chat(req: ChatRequest):
         return {"text": "❌ GROQ_API_KEY non configurata sul server."}
 
     payload = {
-    "model": "llama3-70b-8192",
-    "temperature": 0.9,
-    "max_tokens": 2048,
-    "messages": [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": req.message}
-    ] = [
-    {"SYSTEM_PROMPT = """
-Sei ChatAI Bob, un assistente AI professionale.
-
-REGOLE ASSOLUTE (NON VIOLABILI):
-- Rispondi SEMPRE in italiano
-- NON fare domande di chiarimento
-- NON chiedere dettagli aggiuntivi
-- NON dire frasi come "prima di iniziare", "potresti dirmi", "vorrei sapere"
-- Se l'utente chiede di scrivere un libro, una storia, un testo o codice:
-  INIZIA SUBITO A SCRIVERLO
-- Scegli TU genere, struttura e stile in modo professionale
-- Produci risposte LUNGHE, COMPLETE e BEN STRUTTURATE
-- Usa titoli, capitoli, paragrafi
-- Comportati come un autore esperto, non come un assistente che chiede permesso
-
-ESEMPIO OBBLIGATORIO:
-Utente: "Scrivi un libro"
-Risposta: inizi direttamente dal titolo e Capitolo 1, SENZA domande.
-"""},
-    {"role": "user", "content": req.message}
-](
-            "Sei ChatAI Bob, un assistente AI professionale. "
-            "Rispondi SEMPRE in modo diretto, pratico e completo. "
-            "NON fare domande inutili. "
-            "Se l'utente chiede di scrivere un libro, INIZIA SUBITO a scriverlo. "
-            "Usa uno stile chiaro, naturale e strutturato."
-        )
-    },
-    {
-        "role": "user",
-        "content": req.message
-    }
-]
-            {"role": "system", "content": "Rispondi in italiano, in modo chiaro e utile."},
+        "model": MODEL,
+        "temperature": 0.9,
+        "max_tokens": 2048,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": req.message}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 500
+        ]
     }
 
     headers = {
@@ -97,6 +74,7 @@ Risposta: inizi direttamente dal titolo e Capitolo 1, SENZA domande.
 
     try:
         r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=30)
+        r.raise_for_status()
         data = r.json()
         reply = data["choices"][0]["message"]["content"]
         return {"text": reply}
