@@ -43,9 +43,9 @@ def chat(req: ChatRequest):
         return {"text": "❌ GROQ_API_KEY non configurata sul server."}
 
     messages = [
-    {
-        "role": "system",
-        "content": (
+    {"role": "system", "content": SYSTEM_PROMPT},
+    {"role": "user", "content": req.message}
+](
             "Sei ChatAI Bob, un assistente AI professionale. "
             "Rispondi SEMPRE in modo diretto, pratico e completo. "
             "NON fare domande inutili. "
