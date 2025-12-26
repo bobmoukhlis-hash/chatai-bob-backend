@@ -4,7 +4,20 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import re
 import requests
+from fastapi import FastAPI
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import requests
 
+# 🔹 FUNZIONE DI PULIZIA TESTO (QUI VA MESSA)
+def clean_text(text: str) -> str:
+    bad = ["**", "__", "##", "* ", "`", "---"]
+    for b in bad:
+        text = text.replace(b, "")
+    return text.strip()
+
+app = FastAPI()
 app = FastAPI()
 
 app.add_middleware(
@@ -70,15 +83,30 @@ def chat(req: ChatRequest):
         return {"text": "❌ GROQ_API_KEY non configurata sul server."}
 
     user_msg = (req.message or "").strip()
+SYSTEM_PROMPT = """
+Sei ChatAI Bob.
 
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg}
-        ],
-        "temperature": 0.6,
-        "max_tokens": 1600
+MODALITÀ TESTO PURO (OBBLIGATORIA):
+- Rispondi sempre in italiano
+- NON usare MAI Markdown
+- NON usare **, ##, *, -, _, ` o formattazioni
+- NON usare elenchi Markdown
+- Usa SOLO testo normale con a capo
+- Titoli scritti in MAIUSCOLO, senza simboli
+- NON fare domande
+- NON chiedere chiarimenti
+- NON spiegare cosa stai facendo
+
+Se l'utente chiede:
+- titoli → restituisci SOLO titoli, uno per riga
+- codice → restituisci SOLO codice pulito
+- libro → inizia SUBITO dal contenuto
+
+Esempio corretto:
+TITOLO
+Capitolo 1
+Testo normale senza simboli
+"""
     }
 
     headers = {
@@ -90,8 +118,9 @@ def chat(req: ChatRequest):
         r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
-        reply = data["choices"][0]["message"]["content"].strip()
-
+        reply = data["choices"][0]["message"]["content"]
+reply = clean_text(reply)
+return {"text": reply}
         # ✅ Anti-domande: se prova a fare domande, lo correggiamo al volo
         if looks_like_question(reply):
             fix_payload = {
