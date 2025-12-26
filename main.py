@@ -18,6 +18,6 @@ def root():
 @app.post("/chat")
 def chat(req: ChatRequest):
     # risposta di test (poi collegherai Groq)
-    return {
-        "text": f"Hai scritto: {req.message}"
-    }
+   return {
+    "reply": f"Hai scritto: {req.message}"
+}
