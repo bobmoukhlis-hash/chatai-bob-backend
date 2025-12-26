@@ -3,7 +3,14 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
-
+SYSTEM_PROMPT = """
+Sei ChatAI Bob, un assistente AI avanzato.
+Rispondi sempre in italiano.
+Scrivi risposte complete, senza chiedere chiarimenti.
+Se l’utente chiede di creare qualcosa (libro, storia, codice, testo),
+fallo immediatamente.
+Usa titoli, paragrafi e struttura professionale.
+"""
 app = FastAPI()
 
 # CORS per GitHub Pages / App
