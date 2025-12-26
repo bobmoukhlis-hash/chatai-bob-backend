@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import re
 import requests
 
 app = FastAPI()
@@ -13,21 +14,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===== CONFIG =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.1-8b-instant"  # ✅ MODELLO CORRETTO
+MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """
-Sei ChatAI Bob, un assistente AI professionale.
+Sei ChatAI Bob.
 
-REGOLE ASSOLUTE:
-- Rispondi SEMPRE in italiano
-- NON fare domande
-- NON chiedere chiarimenti
-- Se l'utente chiede di scrivere un libro, INIZIA SUBITO
-- Usa titoli, capitoli e struttura professionale
-- Risposte lunghe, complete e ben scritte
+MODALITÀ: RISPOSTA DIRETTA (OBBLIGATORIA)
+- Rispondi SEMPRE in italiano.
+- NON fare MAI domande.
+- NON chiedere chiarimenti o dettagli.
+- NON dire mai frasi tipo: "Come posso aiutarti?", "Prima di iniziare", "Potresti dirmi", "Vorrei sapere".
+- NON dire mai: "Sono un'intelligenza artificiale", "non ho emozioni", ecc.
+- Se l'utente chiede: libro/storia/testo/codice → INIZIA SUBITO A PRODURRE.
+- Scegli TU genere, tono, struttura in modo professionale.
+- Usa titoli, capitoli, paragrafi.
+- Output lungo e completo.
+
+Se l'utente scrive solo "Ciao" o frasi brevi:
+- rispondi con una frase breve + proponi 3 opzioni (senza fare domande).
 """
 
 class ChatRequest(BaseModel):
@@ -41,19 +47,38 @@ def root():
 def health():
     return {"status": "ok"}
 
+def looks_like_question(text: str) -> bool:
+    # Heuristica: se contiene tanti "?" o frasi tipiche di domanda
+    if text.count("?") >= 1:
+        return True
+    bad_patterns = [
+        r"\bcome posso aiutarti\b",
+        r"\bpotresti\b",
+        r"\bvorrei sapere\b",
+        r"\bprima di iniziare\b",
+        r"\bmi puoi dire\b",
+        r"\bpuoi dirmi\b",
+        r"\bquale\b.*\?",
+        r"\bche tipo\b",
+    ]
+    t = text.lower()
+    return any(re.search(p, t) for p in bad_patterns)
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     if not GROQ_API_KEY:
         return {"text": "❌ GROQ_API_KEY non configurata sul server."}
 
+    user_msg = (req.message or "").strip()
+
     payload = {
         "model": MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": req.message}
+            {"role": "user", "content": user_msg}
         ],
-        "temperature": 0.9,
-        "max_tokens": 1500
+        "temperature": 0.6,
+        "max_tokens": 1600
     }
 
     headers = {
@@ -65,6 +90,28 @@ def chat(req: ChatRequest):
         r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
-        return {"text": data["choices"][0]["message"]["content"]}
+        reply = data["choices"][0]["message"]["content"].strip()
+
+        # ✅ Anti-domande: se prova a fare domande, lo correggiamo al volo
+        if looks_like_question(reply):
+            fix_payload = {
+                "model": MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": reply},
+                    {"role": "user", "content": "Riscrivi la risposta SENZA alcuna domanda, iniziando SUBITO con contenuto utile e completo."}
+                ],
+                "temperature": 0.4,
+                "max_tokens": 1600
+            }
+            r2 = requests.post(GROQ_URL, json=fix_payload, headers=headers, timeout=30)
+            r2.raise_for_status()
+            data2 = r2.json()
+            reply2 = data2["choices"][0]["message"]["content"].strip()
+            return {"text": reply2}
+
+        return {"text": reply}
+
     except Exception as e:
         return {"text": f"⚠️ Errore Groq: {e}"}
