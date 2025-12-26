@@ -10,14 +10,12 @@ class ChatRequest(BaseModel):
 def root():
     return {"status": "ok"}
 
-# 🔑 QUESTA ROUTE SERVE AL FRONTEND
-fetch(API_BASE + "/health")
-  .then(r => r.json())
-  .then(d => {
-    if (d.status === "ok") {
-      setBackendOnline(true);
-    } else {
-      setBackendOnline(false);
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    return {
+        "reply": f"Hai scritto: {req.message}"
     }
-  })
-  .catch(() => setBackendOnline(false));
