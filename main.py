@@ -10,6 +10,13 @@ class ChatRequest(BaseModel):
 def root():
     return {"status": "ok"}
 
+# ✅ AGGIUNGI QUESTA ROTTA
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 @app.post("/chat")
 def chat(req: ChatRequest):
-    return {"reply": f"Hai scritto: {req.message}"}
+    return {
+        "text": f"Hai scritto: {req.message}"
+    }
