@@ -4,6 +4,8 @@ def root():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
+    @app.post("/chat")
+def chat(req: ChatRequest):
     return {
-        "reply": f"Hai scritto: {req.message}"
+        "text": f"Hai scritto: {req.message}"
     }
