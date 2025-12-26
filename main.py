@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# CORS (OBBLIGATORIO per GitHub Pages)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ChatRequest(BaseModel):
     message: str
@@ -17,5 +26,5 @@ def health():
 @app.post("/chat")
 def chat(req: ChatRequest):
     return {
-        "reply": f"Hai scritto: {req.message}"
+        "text": f"Hai scritto: {req.message}"
     }
