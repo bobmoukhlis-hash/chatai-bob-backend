@@ -4,18 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
 
-SYSTEM_PROMPT = """
-Sei ChatAI Bob, un assistente AI professionale.
-
-REGOLE ASSOLUTE:
-- Rispondi SEMPRE in italiano
-- NON fare domande
-- NON chiedere chiarimenti
-- Se l'utente chiede di scrivere un libro, INIZIA SUBITO
-- Usa titoli, capitoli e struttura professionale
-- Risposte lunghe e complete
-"""
-
 app = FastAPI()
 
 app.add_middleware(
@@ -25,9 +13,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ===== CONFIG =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama3-8b-8192"   # ✅ MODELLO GIUSTO
+MODEL = "llama3-8b-8192"   # ✅ MODELLO SICURO
+
+SYSTEM_PROMPT = """
+Sei ChatAI Bob, un assistente AI professionale.
+
+REGOLE:
+- Rispondi sempre in italiano
+- NON fare domande
+- NON chiedere chiarimenti
+- Se l'utente chiede di scrivere un libro, INIZIA SUBITO
+- Usa titoli, capitoli e struttura professionale
+- Risposte lunghe e complete
+"""
 
 class ChatRequest(BaseModel):
     message: str
@@ -52,7 +53,7 @@ def chat(req: ChatRequest):
             {"role": "user", "content": req.message}
         ],
         "temperature": 0.8,
-        "max_tokens": 1500
+        "max_tokens": 1200
     }
 
     headers = {
