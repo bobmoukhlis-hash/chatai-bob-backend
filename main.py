@@ -133,12 +133,14 @@ def db() -> sqlite3.Connection:
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL,
           project_id INTEGER,
-          role TEXT NOT NULL,           -- user / assistant
+          role TEXT NOT NULL,
           content TEXT NOT NULL,
           created_at INTEGER NOT NULL
         )
         """
-    )conn.execute(
+    )
+
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS usage_limits (
             client_id TEXT,
