@@ -84,7 +84,6 @@ def chat(req: ChatRequest):
 
 # Metti MODEL in Render ENV per cambiare senza toccare codice.
 # Se vedi 400, cambia MODEL.
-MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.75"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1700"))
 
