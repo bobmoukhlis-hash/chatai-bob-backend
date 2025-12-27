@@ -1,33 +1,3 @@
-# =========================
-# REPO STRUCTURE
-# =========================
-# backend/
-#   app.py
-#   requirements.txt
-#   start.sh
-# frontend/
-#   index.html
-# android/
-#   app/src/main/AndroidManifest.xml
-#   app/src/main/java/com/chatai/bob/MainActivity.java
-#   app/build.gradle
-#   settings.gradle
-
-
-# =========================
-# backend/requirements.txt
-# =========================
-fastapi
-uvicorn
-requests
-python-multipart
-passlib[bcrypt]
-pillow
-PyPDF2
-
-# =========================
-# backend/app.py
-# =========================
 from __future__ import annotations
 
 import base64
