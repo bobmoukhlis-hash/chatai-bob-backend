@@ -10,7 +10,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import os, requests
