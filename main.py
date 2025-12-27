@@ -22,7 +22,8 @@ app.add_middleware(
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = os.getenv("MODEL")
-
+if not MODEL:
+    raise RuntimeError("MODEL non impostato nelle variabili d'ambiente")
 SYSTEM_PROMPT = """
 Sei ChatAI Bob, un assistente AI avanzato e professionale.
 Rispondi SEMPRE in italiano.
