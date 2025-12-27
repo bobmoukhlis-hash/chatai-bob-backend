@@ -60,7 +60,8 @@ from PyPDF2 import PdfReader
 # -------------------------
 # CONFIG
 # -------------------------
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+def get_groq_key():
+    return os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 DB_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
