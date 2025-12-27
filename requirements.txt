@@ -2,11 +2,6 @@ fastapi
 uvicorn
 requests
 python-multipart
-pydantic
+passlib[bcrypt]
 pillow
-pypdf
-
-# OCR:
-easyocr
-pytesseract
-pdf2image
+PyPDF2
