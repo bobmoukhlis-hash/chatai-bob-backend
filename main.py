@@ -39,15 +39,7 @@ class ChatRequest(BaseModel):
 
 # =========================
 # ROUTES
-# =========================
-@app.get("/")
-def root():
-    return {"status": "ok"}
 
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
         "model": MODEL,
         "env_model": os.getenv("MODEL")
     }
