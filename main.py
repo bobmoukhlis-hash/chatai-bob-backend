@@ -146,6 +146,19 @@ def db() -> sqlite3.Connection:
           created_at INTEGER NOT NULL
         )
         """
+    )conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_limits (
+            client_id TEXT,
+            day INTEGER,
+            chat_count INTEGER DEFAULT 0,
+            image_count INTEGER DEFAULT 0,
+            video_count INTEGER DEFAULT 0,
+            pdf_count INTEGER DEFAULT 0,
+            voice_count INTEGER DEFAULT 0,
+            PRIMARY KEY (client_id, day)
+        )
+        """
     )
     conn.commit()
     return conn
