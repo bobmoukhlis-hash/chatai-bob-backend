@@ -27,7 +27,7 @@ app.add_middleware(
 # ===== CONFIG =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL MODELMODEL = "llama3-8b-8192"
+MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """
 Sei ChatAI Bob, un assistente AI avanzato e professionale.
