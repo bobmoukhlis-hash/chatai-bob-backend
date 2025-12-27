@@ -348,17 +348,20 @@ def language_rule(user_text: str) -> str:
 # -------------------------
 # GROQ
 # -------------------------
-def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tokens: int = 1400) -> str:
-    if not GROQ_API_KEY:
-        return "ERRORE: GROQ_API_KEY non configurata sul server."
-
+def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tokens: int = 1400):
+    api_key = get_groq_key()
+    if not api_key:
+        return "⚠️ Servizio in avvio, riprova tra qualche secondo."
     payload = {
         "model": MODEL,
         "messages": messages,
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
     }
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+    "Authorization": f"Bearer {api_key}",
+    "Content-Type": "application/json"
+}
     r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=45)
 
     if not r.ok:
