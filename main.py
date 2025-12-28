@@ -278,7 +278,7 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
 # ================= IMAGE =================
 @app.post("/image")
 def image(req: ImageRequest, authorization: Optional[str] = Header(None)):
-    user_id, _premium = auth_user(authorization)
+    user_id, _ = auth_user(authorization)
 
     if user_id is None:
         if not free_can(req.client_id, "image"):
@@ -287,14 +287,17 @@ def image(req: ImageRequest, authorization: Optional[str] = Header(None)):
 
     try:
         img = pollinations_image(req.prompt)
-        return {"url": "data:image/png;base64," + base64.b64encode(img).decode()}
+        return {
+            "url": "data:image/png;base64," + base64.b64encode(img).decode()
+        }
     except Exception:
-        return {"error": "Errore generazione immagine (Pollinations offline o prompt non valido)."}
-
+        return {
+            "error": "Errore generazione immagine (Pollinations offline o prompt non valido)."
+        }
 # ================= VIDEO =================
 @app.post("/video")
 def video(req: VideoRequest, authorization: Optional[str] = Header(None)):
-    user_id, _premium = auth_user(authorization)
+    user_id, _ = auth_user(authorization)
 
     if user_id is None:
         if not free_can(req.client_id, "video"):
@@ -304,9 +307,11 @@ def video(req: VideoRequest, authorization: Optional[str] = Header(None)):
     try:
         prompts = [f"{req.prompt}, scene {i}" for i in range(1, 5)]
         gif = make_gif(prompts)
-        return {"url": "data:image/gif;base64," + base64.b64encode(gif).decode()}
-    except Exception:
-        return {"error": "Errore generazione GIF (Pollinations offline o errore immagini)."}
+        return {
+            "url": "data:image/gif;base64," + base64.b64encode(gif).decode()
+        }
+    except Exception as e:
+        return {"error": "Errore generazione GIF (Pollinations offline o errore immagini)"}
 
 # ================= PDF =================
 @app.post("/analyze")
