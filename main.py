@@ -156,17 +156,36 @@ def kv_load(s: str) -> Dict[str, str]:
 # -------------------------
 # AUTH (Premium)
 # -------------------------
-def new_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def auth_user_required(authorization: Optional[str]) -> Tuple[int, bool]:
+def auth_user(authorization: Optional[str]):
     """
-    Returns (user_id, premium).
-    Authorization: Bearer <token>
+    Returns (user_id, premium)
+    - FREE user: (None, False)
+    - PREMIUM user: (user_id, True)
     """
+
+    # 👉 FREE user (nessun token)
     if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization Bearer token")
+        return None, False
+
+    m = re.match(r"Bearer\s+(.+)", authorization or "", re.IGNORECASE)
+    if not m:
+        return None, False
+
+    token = m.group(1).strip()
+    row = DB.execute(
+        """
+        SELECT t.user_id, u.premium
+        FROM tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token=?
+        """,
+        (token,),
+    ).fetchone()
+
+    if not row:
+        return None, False
+
+    return int(row[0]), bool(row[1] == 1)
 
     m = re.match(r"Bearer\s+(.+)", authorization.strip(), re.IGNORECASE)
     if not m:
@@ -515,22 +534,34 @@ def health():
 # -------------------------
 # AUTH ROUTES (Premium)
 # -------------------------
-@app.post("/auth/signup")
-def signup(req: SignupRequest):
-    email = req.email.strip().lower()
-    if not email or "@" not in email or len(req.password) < 6:
-        return {"ok": False, "error": "Email o password non valida (min 6 caratteri)."}
+def auth_user(authorization: Optional[str]) -> Tuple[Optional[int], bool]:
+    """
+    FREE  -> (None, False)
+    USER  -> (user_id, False)
+    PREMIUM -> (user_id, True)
+    """
+    if not authorization:
+        return None, False
 
-    try:
-        DB.execute(
-            "INSERT INTO users (email, password_hash, premium, created_at) VALUES (?,?,0,?)",
-            (email, bcrypt.hash(req.password), now_ts()),
-        )
-        DB.commit()
-    except sqlite3.IntegrityError:
-        return {"ok": False, "error": "Email già registrata."}
+    m = re.match(r"Bearer\s+(.+)", authorization or "", re.IGNORECASE)
+    if not m:
+        return None, False
 
-    return {"ok": True}
+    token = m.group(1).strip()
+    row = DB.execute(
+        """
+        SELECT t.user_id, u.premium
+        FROM tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token=?
+        """,
+        (token,),
+    ).fetchone()
+
+    if not row:
+        return None, False
+
+    return int(row[0]), bool(row[1] == 1)
 
 
 @app.post("/auth/login")
