@@ -4,175 +4,161 @@ from __future__ import annotations
 import base64
 import io
 import os
-import re
-import secrets
-import sqlite3
 import time
-from typing import Optional, Tuple, List
+from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import FastAPI, File, Form, Header, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.hash import bcrypt
 from PIL import Image
 from pydantic import BaseModel
-from PyPDF2 import PdfReader
 
 # ================= CONFIG =================
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile")
-DB_PATH = os.getenv("SQLITE_PATH", "data.sqlite3")
-POLLINATIONS_BASE = "https://image.pollinations.ai/prompt/"
+GROQ_MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 
-LIMITS_FREE = {
-    "chat": 15,
-    "image": 3,
-    "video": 3,
-    "pdf": 3,
-}
+HF_TOKEN = (os.getenv("HF_TOKEN") or "").strip()
+HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0").strip()
+HF_CAPTION_MODEL = os.getenv("HF_CAPTION_MODEL", "Salesforce/blip-image-captioning-large").strip()
 
-def today() -> int:
-    return int(time.time() // 86400)
+HF_INFER_BASE = "https://api-inference.huggingface.co/models/"
 
-# ================= DB =================
-def db() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH, check_same_thread=False)
-    c.execute("PRAGMA journal_mode=WAL;")
-    c.execute("PRAGMA foreign_keys=ON;")
+LIMITS_FREE = {"chat": 15, "image": 3, "video": 3, "photo": 5}
+# Per produzione: collega limiti a DB (qui minimal: in-memory per semplicità)
+FREE_USAGE: Dict[str, Dict[str, int]] = {}  # {client_id: {day:count...}} semplificato
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY,
-        email TEXT UNIQUE,
-        password_hash TEXT,
-        premium INTEGER DEFAULT 0
-    )
-    """)
+# ================= UTILS =================
+def _day_key() -> str:
+    return str(int(time.time() // 86400))
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS tokens(
-        token TEXT PRIMARY KEY,
-        user_id INTEGER,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-    """)
+def _free_get(client_id: str, action: str) -> int:
+    d = _day_key()
+    FREE_USAGE.setdefault(client_id, {})
+    FREE_USAGE[client_id].setdefault(d, 0)
+    # separazione azioni semplice: client_id|action
+    key = f"{d}:{action}"
+    return FREE_USAGE[client_id].get(key, 0)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS usage_free(
-        client_id TEXT,
-        day INTEGER,
-        action TEXT,
-        count INTEGER,
-        PRIMARY KEY(client_id, day, action)
-    )
-    """)
+def _free_inc(client_id: str, action: str) -> None:
+    d = _day_key()
+    key = f"{d}:{action}"
+    FREE_USAGE.setdefault(client_id, {})
+    FREE_USAGE[client_id][key] = FREE_USAGE[client_id].get(key, 0) + 1
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS messages(
-        id INTEGER PRIMARY KEY,
-        user_id INTEGER,
-        role TEXT,
-        content TEXT,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-    """)
+def _free_can(client_id: str, action: str) -> bool:
+    limit = int(LIMITS_FREE.get(action, 0))
+    return _free_get(client_id, action) < limit
 
-    c.commit()
-    return c
+def _groq_key() -> str:
+    return (os.getenv("GROQ_API_KEY") or "").strip()
 
-DB = db()
+def _hf_headers() -> Dict[str, str]:
+    if not HF_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {HF_TOKEN}"}
 
-# ================= AUTH =================
-def new_token() -> str:
-    return secrets.token_urlsafe(32)
+def _data_url(mime: str, b: bytes) -> str:
+    return f"data:{mime};base64," + base64.b64encode(b).decode("utf-8")
 
-def auth_user(authorization: Optional[str]) -> Tuple[Optional[int], bool]:
-    if not authorization:
-        return None, False
+def _clean_markdown_like(text: str) -> str:
+    if not text:
+        return ""
+    for bad in ["```", "##", "**", "__"]:
+        text = text.replace(bad, "")
+    return text.strip()
 
-    m = re.match(r"Bearer\s+(.+)", authorization.strip())
-    if not m:
-        return None, False
+# ================= GROQ CHAT =================
+BASE_RULES = (
+    "Sei ChatAI Bob.\n"
+    "Regole:\n"
+    "- Rispondi naturale e chiaro.\n"
+    "- Se l’utente chiede codice: fornisci codice completo.\n"
+    "- Se chiede HTML/CSS/JS: fornisci file completi.\n"
+    "- Rispondi nella lingua dell’utente.\n"
+)
 
-    token = m.group(1)
-    row = DB.execute(
-        "SELECT u.id, u.premium FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.token=?",
-        (token,)
-    ).fetchone()
-
-    if not row:
-        return None, False
-
-    return int(row[0]), bool(row[1])
-
-# ================= LIMITS =================
-def free_can(client_id: str, action: str) -> bool:
-    row = DB.execute(
-        "SELECT count FROM usage_free WHERE client_id=? AND day=? AND action=?",
-        (client_id, today(), action)
-    ).fetchone()
-    used = int(row[0]) if row else 0
-    return used < int(LIMITS_FREE[action])
-
-def free_inc(client_id: str, action: str) -> None:
-    DB.execute("""
-        INSERT INTO usage_free(client_id, day, action, count) VALUES(?,?,?,1)
-        ON CONFLICT(client_id,day,action) DO UPDATE SET count=count+1
-    """, (client_id, today(), action))
-    DB.commit()
-
-# ================= AI RULES =================
-BASE_RULES = """
-Sei ChatAI Bob.
-
-REGOLE ASSOLUTE:
-- Rispondi come un umano esperto, chiaro e diretto.
-- NON usare markdown, simboli strani o codice incompleto.
-- Se l’utente chiede codice: scrivi SEMPRE codice completo.
-- Se chiede HTML/CSS/JS: fornisci file completi pronti all’uso.
-- Se chiede libri o testi lunghi: scrivi capitoli interi.
-- Non fare domande di chiarimento: decidi tu e procedi.
-- Se l’utente chiede informazioni, includi contesto, esempi e trend attuali.
-- Rispondi nella lingua dell’utente.
-""".strip()
-
-# ================= GROQ =================
-def groq_chat(messages) -> str:
-    key = os.getenv("GROQ_API_KEY")
+def groq_chat(user_text: str, extra_context: str = "") -> str:
+    key = _groq_key()
     if not key:
-        return "Servizio non disponibile: manca GROQ_API_KEY."
+        return "Servizio chat non disponibile (manca GROQ_API_KEY)."
 
-    try:
-        r = requests.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {key}"},
-            json={"model": MODEL, "messages": messages, "temperature": 0.8},
-            timeout=40
-        )
-    except Exception:
-        return "Errore di rete verso Groq."
+    sys = BASE_RULES
+    if extra_context:
+        sys += "\nCONTESTO EXTRA:\n" + extra_context
 
-    if r.status_code != 200:
-        return f"Errore Groq (HTTP {r.status_code})."
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 0.8,
+        "max_tokens": 1400,
+    }
+    r = requests.post(
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if not r.ok:
+        return f"Errore chat ({r.status_code})."
+    data = r.json()
+    out = data["choices"][0]["message"]["content"]
+    return _clean_markdown_like(out)
 
-    try:
-        data = r.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return "Errore Groq: risposta non valida."
+# ================= HF: TEXT->IMAGE =================
+def hf_text_to_image(prompt: str, timeout_s: int = 120) -> bytes:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN mancante")
 
-# ================= MEDIA =================
-def pollinations_image(prompt: str) -> bytes:
-    url = POLLINATIONS_BASE + requests.utils.quote(prompt)
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
+    url = HF_INFER_BASE + HF_IMAGE_MODEL
+    # Inference API: per molti modelli text-to-image accetta JSON {"inputs": "..."}
+    r = requests.post(
+        url,
+        headers={**_hf_headers(), "Accept": "image/png", "Content-Type": "application/json"},
+        json={"inputs": prompt},
+        timeout=timeout_s,
+    )
+    if r.status_code == 503:
+        # model loading
+        raise RuntimeError("Modello immagini in avvio (riprovare).")
+    if not r.ok:
+        raise RuntimeError(f"HF image error {r.status_code}: {r.text[:200]}")
     return r.content
 
-def make_gif(prompts: List[str]) -> bytes:
+# ================= HF: IMAGE CAPTION =================
+def hf_caption_image(image_bytes: bytes, timeout_s: int = 60) -> str:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN mancante")
+
+    url = HF_INFER_BASE + HF_CAPTION_MODEL
+    # Image-to-text: spesso accetta raw bytes come body
+    r = requests.post(
+        url,
+        headers={**_hf_headers(), "Accept": "application/json"},
+        data=image_bytes,
+        timeout=timeout_s,
+    )
+    if r.status_code == 503:
+        raise RuntimeError("Modello analisi foto in avvio (riprovare).")
+    if not r.ok:
+        raise RuntimeError(f"HF caption error {r.status_code}: {r.text[:200]}")
+
+    data = r.json()
+    # BLIP ritorna tipicamente [{"generated_text":"..."}]
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return str(data[0].get("generated_text", "")).strip()
+    if isinstance(data, dict) and "generated_text" in data:
+        return str(data["generated_text"]).strip()
+    return str(data).strip()
+
+# ================= GIF (VIDEO) =================
+def make_gif_from_prompts(prompts: List[str], duration_ms: int = 650) -> bytes:
     frames: List[Image.Image] = []
     for p in prompts:
-        img_bytes = pollinations_image(p)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img_b = hf_text_to_image(p, timeout_s=140)
+        img = Image.open(io.BytesIO(img_b)).convert("RGB")
         frames.append(img)
 
     out = io.BytesIO()
@@ -181,161 +167,129 @@ def make_gif(prompts: List[str]) -> bytes:
         format="GIF",
         save_all=True,
         append_images=frames[1:],
-        duration=800,
-        loop=0
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
     )
     return out.getvalue()
 
 # ================= API MODELS =================
-class SignupRequest(BaseModel):
-    email: str
-    password: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
 class ChatRequest(BaseModel):
     message: str
-    client_id: str
+    client_id: Optional[str] = "client_anon"
 
 class ImageRequest(BaseModel):
     prompt: str
-    client_id: str
+    client_id: Optional[str] = "client_anon"
 
 class VideoRequest(BaseModel):
     prompt: str
-    client_id: str
+    client_id: Optional[str] = "client_anon"
 
 # ================= APP =================
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # per Play Store: restringi al tuo dominio/app
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, Any]:
     return {"status": "ok"}
 
-# ================= AUTH ROUTES =================
-@app.post("/auth/signup")
-def signup(req: SignupRequest):
-    email = req.email.strip().lower()
-    if not email or not req.password:
-        return {"ok": False, "error": "Email o password mancanti."}
-
-    try:
-        DB.execute(
-            "INSERT INTO users(email,password_hash) VALUES(?,?)",
-            (email, bcrypt.hash(req.password))
-        )
-        DB.commit()
-        return {"ok": True}
-    except sqlite3.IntegrityError:
-        return {"ok": False, "error": "Email già registrata."}
-    except Exception:
-        return {"ok": False, "error": "Errore interno signup."}
-
-@app.post("/auth/login")
-def login(req: LoginRequest):
-    email = req.email.strip().lower()
-    row = DB.execute(
-        "SELECT id,password_hash,premium FROM users WHERE email=?",
-        (email,)
-    ).fetchone()
-
-    if not row:
-        return {"ok": False, "error": "Credenziali non valide."}
-
-    if not bcrypt.verify(req.password, row[1]):
-        return {"ok": False, "error": "Credenziali non valide."}
-
-    token = new_token()
-    DB.execute("INSERT INTO tokens(token,user_id) VALUES(?,?)", (token, int(row[0])))
-    DB.commit()
-    return {"ok": True, "token": token, "premium": bool(row[2])}
-
-# ================= CHAT =================
 @app.post("/chat")
-def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
-    user_id, premium = auth_user(authorization)
+def chat(req: ChatRequest) -> Dict[str, str]:
+    client_id = (req.client_id or "client_anon").strip()
 
-    if user_id is None:
-        if not free_can(req.client_id, "chat"):
-            return {"text": "Limite FREE raggiunto."}
-        free_inc(req.client_id, "chat")
+    if not _free_can(client_id, "chat"):
+        return {"text": "Limite chat FREE raggiunto. Passa a Premium."}
 
-    reply = groq_chat([
-        {"role": "system", "content": BASE_RULES},
-        {"role": "user", "content": req.message},
-    ])
+    _free_inc(client_id, "chat")
+    reply = groq_chat(req.message)
     return {"text": reply}
 
-# ================= IMAGE =================
 @app.post("/image")
-def image(req: ImageRequest, authorization: Optional[str] = Header(None)):
-    user_id, _ = auth_user(authorization)
+def image(req: ImageRequest) -> Dict[str, str]:
+    client_id = (req.client_id or "client_anon").strip()
 
-    if user_id is None:
-        if not free_can(req.client_id, "image"):
-            return {"error": "Limite immagini FREE"}
-        free_inc(req.client_id, "image")
+    if not _free_can(client_id, "image"):
+        return {"error": "Limite immagini FREE raggiunto. Passa a Premium."}
+
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        return {"error": "Scrivi un prompt per l’immagine."}
+
+    # prompt pulito, senza watermark/loghi
+    enhanced = (
+        "high quality, ultra detailed, clean composition, "
+        "no text, no watermark, no logo, no brand, "
+        + prompt
+    )
 
     try:
-        img = pollinations_image(req.prompt)
-        return {
-            "url": "data:image/png;base64," + base64.b64encode(img).decode()
-        }
+        _free_inc(client_id, "image")
+        img = hf_text_to_image(enhanced)
+        return {"url": _data_url("image/png", img)}
     except Exception:
-        return {
-            "error": "Errore generazione immagine (Pollinations offline o prompt non valido)."
-        }
-# ================= VIDEO =================
+        return {"error": "Errore generazione immagine (servizio occupato o offline). Riprova."}
+
 @app.post("/video")
-def video(req: VideoRequest, authorization: Optional[str] = Header(None)):
-    user_id, _ = auth_user(authorization)
+def video(req: VideoRequest) -> Dict[str, str]:
+    client_id = (req.client_id or "client_anon").strip()
 
-    if user_id is None:
-        if not free_can(req.client_id, "video"):
-            return {"error": "Limite video FREE"}
-        free_inc(req.client_id, "video")
+    if not _free_can(client_id, "video"):
+        return {"error": "Limite video FREE raggiunto. Passa a Premium."}
 
-    try:
-        prompts = [f"{req.prompt}, scene {i}" for i in range(1, 5)]
-        gif = make_gif(prompts)
-        return {
-            "url": "data:image/gif;base64," + base64.b64encode(gif).decode()
-        }
-    except Exception as e:
-        return {"error": "Errore generazione GIF (Pollinations offline o errore immagini)"}
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        return {"error": "Scrivi un prompt per il video/GIF."}
 
-# ================= PDF =================
-@app.post("/analyze")
-async def analyze(
-    file: UploadFile = File(...),
-    prompt: str = Form(...),
-    client_id: str = Form("client"),
-    authorization: Optional[str] = Header(None),
-):
-    user_id, _premium = auth_user(authorization)
-
-    if user_id is None:
-        if not free_can(client_id, "pdf"):
-            return {"text": "Limite PDF FREE"}
-        free_inc(client_id, "pdf")
+    # GIF = 4 frame con “movimento”
+    # (stabile in produzione: niente “vero video model”)
+    base = (
+        "high quality, ultra detailed, clean composition, "
+        "no text, no watermark, no logo, no brand, "
+    )
+    motion = "same character, consistent face, consistent outfit, smooth motion"
+    frames = [
+        f"{base}{motion}, frame 1, start of action, {prompt}",
+        f"{base}{motion}, frame 2, mid action, {prompt}",
+        f"{base}{motion}, frame 3, continue action, {prompt}",
+        f"{base}{motion}, frame 4, end action, {prompt}",
+    ]
 
     try:
-        reader = PdfReader(io.BytesIO(await file.read()))
-        text = "\n".join((p.extract_text() or "") for p in reader.pages[:20])
+        _free_inc(client_id, "video")
+        gif = make_gif_from_prompts(frames, duration_ms=650)
+        return {"url": _data_url("image/gif", gif)}
     except Exception:
-        return {"text": "Errore: PDF non leggibile."}
+        return {"error": "Errore generazione GIF (servizio occupato o offline). Riprova."}
 
-    reply = groq_chat([
-        {"role": "system", "content": "Analizza il documento."},
-        {"role": "user", "content": prompt + "\n\n" + text},
-    ])
-    return {"text": reply}
+@app.post("/analyze_photo")
+async def analyze_photo(
+    file: UploadFile = File(...),
+    question: str = Form(""),
+    client_id: str = Form("client_anon"),
+) -> Dict[str, str]:
+    client_id = (client_id or "client_anon").strip()
+
+    if not _free_can(client_id, "photo"):
+        return {"text": "Limite analisi foto FREE raggiunto. Passa a Premium."}
+
+    content = await file.read()
+    if not content:
+        return {"text": "File vuoto."}
+
+    q = (question or "").strip() or "Descrivi la foto in modo dettagliato e dimmi cosa è importante."
+    try:
+        _free_inc(client_id, "photo")
+        caption = hf_caption_image(content)
+        # Risposta “intelligente”: caption + domanda -> Groq
+        ctx = f"DESCRIZIONE FOTO (da modello visivo): {caption}"
+        reply = groq_chat(q, extra_context=ctx)
+        return {"text": reply, "caption": caption}
+    except Exception:
+        return {"text": "Errore analisi foto (servizio occupato o offline). Riprova."}
