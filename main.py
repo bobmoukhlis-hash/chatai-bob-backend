@@ -103,7 +103,20 @@ def free_inc(client_id: str, action: str):
         ON CONFLICT(client_id,day,action) DO UPDATE SET count=count+1
     """, (client_id, today(), action))
     DB.commit()
+# ================= AI RULES =================
+BASE_RULES = """
+Sei ChatAI Bob.
 
+REGOLE ASSOLUTE:
+- Rispondi come un umano esperto, chiaro e diretto.
+- NON usare markdown, simboli strani o codice incompleto.
+- Se l’utente chiede codice: scrivi SEMPRE codice completo.
+- Se chiede HTML/CSS/JS: fornisci file completi pronti all’uso.
+- Se chiede libri o testi lunghi: scrivi capitoli interi.
+- Non fare domande di chiarimento: decidi tu e procedi.
+- Se l’utente chiede informazioni, includi contesto, esempi e trend attuali.
+- Rispondi nella lingua dell’utente.
+"""
 # ================= GROQ =================
 def groq_chat(messages):
     key = os.getenv("GROQ_API_KEY")
@@ -203,7 +216,7 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
         free_inc(req.client_id, "chat")
 
     reply = groq_chat([
-        {"role": "system", "content": "Sei ChatAI Bob, rispondi in modo naturale."},
+        {"role": "system", "content": BASE_RULES}
         {"role": "user", "content": req.message}
     ])
     return {"text": reply}
