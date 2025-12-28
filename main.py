@@ -216,9 +216,10 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
         free_inc(req.client_id, "chat")
 
     reply = groq_chat([
-        {"role": "system", "content": BASE_RULES}
+        {"role": "system", "content": BASE_RULES},
         {"role": "user", "content": req.message}
     ])
+
     return {"text": reply}
 
 # ================= IMAGE =================
@@ -237,13 +238,18 @@ def image(req: ImageRequest, authorization: Optional[str] = Header(None)):
 @app.post("/video")
 def video(req: VideoRequest, authorization: Optional[str] = Header(None)):
     user_id, _ = auth_user(authorization)
+
     if user_id is None:
         if not free_can(req.client_id, "video"):
             return {"error": "Limite video FREE"}
         free_inc(req.client_id, "video")
 
-    gif = make_gif([req.prompt + f", scene {i}" for i in range(1,4)])
-    return {"url": "data:image/gif;base64," + base64.b64encode(gif).decode()}
+    prompts = [f"{req.prompt}, scene {i}" for i in range(1, 5)]
+    gif = make_gif(prompts)
+
+    return {
+        "url": "data:image/gif;base64," + base64.b64encode(gif).decode()
+    }
 
 # ================= PDF =================
 @app.post("/analyze")
