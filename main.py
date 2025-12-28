@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import base64
@@ -7,7 +8,6 @@ import re
 import secrets
 import sqlite3
 import time
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -21,19 +21,20 @@ from PyPDF2 import PdfReader
 # -------------------------
 # CONFIG
 # -------------------------
-def get_groq_key():
+def get_groq_key() -> Optional[str]:
     return os.environ.get("GROQ_API_KEY")
+
+
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 DB_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
-
 POLLINATIONS_BASE = "https://image.pollinations.ai/prompt/"
 
-# FREE LIMITS
+# FREE LIMITS (per client_id / giorno)
 LIMITS_FREE = {
     "chat": 15,
-    "voice": 15,   # per ora contatore, la voce lato browser non consuma backend
-    "mic": 15,     # idem, ma lo contiamo quando il client manda "mic_used": true
+    "voice": 15,
+    "mic": 15,
     "image": 3,
     "video": 3,
     "pdf": 3,
@@ -46,8 +47,10 @@ LIMITS_FREE = {
 def now_ts() -> int:
     return int(time.time())
 
+
 def today_day() -> int:
     return int(time.time() // 86400)
+
 
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -90,8 +93,8 @@ def db() -> sqlite3.Connection:
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL,
           name TEXT NOT NULL,
-          type TEXT NOT NULL,           -- BOOK / COACH / CODER / GENERAL
-          state TEXT NOT NULL,          -- key=value;key=value
+          type TEXT NOT NULL,
+          state TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         )
@@ -109,7 +112,6 @@ def db() -> sqlite3.Connection:
         )
         """
     )
-
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS usage_limits (
@@ -120,6 +122,7 @@ def db() -> sqlite3.Connection:
             video_count INTEGER DEFAULT 0,
             pdf_count INTEGER DEFAULT 0,
             voice_count INTEGER DEFAULT 0,
+            mic_count INTEGER DEFAULT 0,
             PRIMARY KEY (client_id, day)
         )
         """
@@ -127,13 +130,16 @@ def db() -> sqlite3.Connection:
     conn.commit()
     return conn
 
+
 DB = db()
+
 
 def kv_dump(d: Dict[str, Any]) -> str:
     parts: List[str] = []
     for k, v in d.items():
         parts.append(f"{k}={str(v).replace(';',' ').replace('\\n',' ')}")
     return ";".join(parts)
+
 
 def kv_load(s: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -146,13 +152,15 @@ def kv_load(s: str) -> Dict[str, str]:
         out[k.strip()] = v.strip()
     return out
 
+
 # -------------------------
-# AUTH
+# AUTH (Premium)
 # -------------------------
 def new_token() -> str:
     return secrets.token_urlsafe(32)
 
-def auth_user(authorization: Optional[str]) -> Tuple[int, bool]:
+
+def auth_user_required(authorization: Optional[str]) -> Tuple[int, bool]:
     """
     Returns (user_id, premium).
     Authorization: Bearer <token>
@@ -180,16 +188,27 @@ def auth_user(authorization: Optional[str]) -> Tuple[int, bool]:
 
     DB.execute("UPDATE tokens SET last_seen=? WHERE token=?", (now_ts(), token))
     DB.commit()
-    return int(row[0]), bool(row[1] == 1)
+    return int(row[0]), bool(int(row[1]) == 1)
+
+
+def auth_user_optional(authorization: Optional[str]) -> Tuple[Optional[int], bool]:
+    if not authorization:
+        return None, False
+    try:
+        return auth_user_required(authorization)
+    except HTTPException:
+        return None, False
+
 
 def set_premium_by_email(email: str, premium: int) -> None:
     DB.execute("UPDATE users SET premium=? WHERE email=?", (premium, email.strip().lower()))
     DB.commit()
 
+
 # -------------------------
-# LIMITS
+# LIMITS (Premium per user_id)
 # -------------------------
-def can_use(user_id: int, premium: bool, action: str) -> bool:
+def can_use_user(user_id: int, premium: bool, action: str) -> bool:
     if premium:
         return True
     if action not in LIMITS_FREE:
@@ -202,7 +221,8 @@ def can_use(user_id: int, premium: bool, action: str) -> bool:
     used = int(row[0]) if row else 0
     return used < int(LIMITS_FREE[action])
 
-def inc_use(user_id: int, action: str) -> None:
+
+def inc_use_user(user_id: int, action: str) -> None:
     if action not in LIMITS_FREE:
         action = "other"
     day = today_day()
@@ -216,6 +236,7 @@ def inc_use(user_id: int, action: str) -> None:
     )
     DB.commit()
 
+
 def usage_snapshot(user_id: int) -> Dict[str, int]:
     day = today_day()
     rows = DB.execute("SELECT action, count FROM usage WHERE user_id=? AND day=?", (user_id, day)).fetchall()
@@ -223,6 +244,59 @@ def usage_snapshot(user_id: int) -> Dict[str, int]:
     for a, c in rows:
         out[str(a)] = int(c)
     return out
+
+
+# -------------------------
+# LIMITS (FREE per client_id)
+# -------------------------
+def _free_row(client_id: str) -> Tuple[int, int, int, int, int, int]:
+    day = today_day()
+    row = DB.execute(
+        """
+        SELECT chat_count, image_count, video_count, pdf_count, voice_count, mic_count
+        FROM usage_limits
+        WHERE client_id=? AND day=?
+        """,
+        (client_id, day),
+    ).fetchone()
+    if row:
+        return (int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), int(row[5]))
+
+    DB.execute(
+        "INSERT INTO usage_limits (client_id, day) VALUES (?, ?)",
+        (client_id, day),
+    )
+    DB.commit()
+    return (0, 0, 0, 0, 0, 0)
+
+
+def free_can_use(client_id: str, action: str) -> bool:
+    action = action if action in LIMITS_FREE else "other"
+    chat_c, img_c, vid_c, pdf_c, voice_c, mic_c = _free_row(client_id)
+    used_map = {
+        "chat": chat_c,
+        "image": img_c,
+        "video": vid_c,
+        "pdf": pdf_c,
+        "voice": voice_c,
+        "mic": mic_c,
+        "other": 0,
+    }
+    return used_map.get(action, 0) < int(LIMITS_FREE.get(action, 0))
+
+
+def free_inc_use(client_id: str, action: str) -> None:
+    action = action if action in LIMITS_FREE else "other"
+    day = today_day()
+    col = f"{action}_count" if action in {"chat", "image", "video", "pdf", "voice", "mic"} else None
+    if not col:
+        return
+    DB.execute(
+        f"UPDATE usage_limits SET {col}={col}+1 WHERE client_id=? AND day=?",
+        (client_id, day),
+    )
+    DB.commit()
+
 
 # -------------------------
 # AI PROMPTS (NO MARKDOWN)
@@ -266,6 +340,7 @@ MODALITÀ ANALISI DOCUMENTI:
 - Produci: RIASSUNTO, PUNTI CHIAVE, AZIONI, DATI IMPORTANTI.
 """
 
+
 def detect_intent(user_text: str) -> str:
     t = (user_text or "").lower().strip()
     if any(x in t for x in ["libro", "romanzo", "storia", "racconto", "capitolo", "scrivi un libro"]):
@@ -278,6 +353,7 @@ def detect_intent(user_text: str) -> str:
         return "AUTO"
     return "GENERAL"
 
+
 def pick_prompt(mode: str) -> str:
     if mode == "AUTHOR":
         return AUTHOR_PROMPT
@@ -289,6 +365,7 @@ def pick_prompt(mode: str) -> str:
         return AUTOCORE_PROMPT
     return BASE_RULES
 
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
@@ -297,24 +374,25 @@ def clean_text(text: str) -> str:
     text = text.replace("* ", "• ")
     return text.strip()
 
+
 def language_rule(user_text: str) -> str:
     t = user_text or ""
     if re.search(r"[\u0600-\u06FF]", t):
         return "أجب باللغة العربية المغربية إن أمكن، وبأسلوب طبيعي وإنساني."
-    # english quick signals
     low = t.lower()
     if any(x in low for x in ["hello", "write", "book", "plan", "business", "how to", "why", "what is"]):
         return "Reply in English, natural, human."
-    # otherwise: mirror user language
     return "Rispondi nella stessa lingua usata dall’utente. Se non è chiara, scegli la lingua più probabile."
+
 
 # -------------------------
 # GROQ
 # -------------------------
-def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tokens: int = 1400):
+def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tokens: int = 1400) -> str:
     api_key = get_groq_key()
     if not api_key:
         return "⚠️ Servizio in avvio, riprova tra qualche secondo."
+
     payload = {
         "model": MODEL,
         "messages": messages,
@@ -322,11 +400,11 @@ def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tok
         "max_tokens": int(max_tokens),
     }
     headers = {
-    "Authorization": f"Bearer {api_key}",
-    "Content-Type": "application/json"
-}
-    r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=45)
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
+    r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=45)
     if not r.ok:
         try:
             return f"ERRORE GROQ HTTP {r.status_code}: {r.json()}"
@@ -335,6 +413,7 @@ def groq_chat(messages: List[Dict[str, str]], temperature: float = 0.75, max_tok
 
     data = r.json()
     return data["choices"][0]["message"]["content"]
+
 
 # -------------------------
 # MEDIA (IMAGE/VIDEO)
@@ -345,6 +424,7 @@ def pollinations_image(prompt: str) -> bytes:
     r.raise_for_status()
     return r.content
 
+
 def make_gif(prompts: List[str], duration_ms: int = 850) -> bytes:
     frames: List[Image.Image] = []
     for p in prompts:
@@ -354,6 +434,7 @@ def make_gif(prompts: List[str], duration_ms: int = 850) -> bytes:
     out = io.BytesIO()
     frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:], duration=duration_ms, loop=0)
     return out.getvalue()
+
 
 # -------------------------
 # PDF TEXT
@@ -367,6 +448,7 @@ def extract_pdf_text(file_bytes: bytes, max_pages: int = 40) -> str:
             texts.append(txt)
     return "\n\n".join(texts).strip()
 
+
 # -------------------------
 # API MODELS
 # -------------------------
@@ -374,27 +456,33 @@ class SignupRequest(BaseModel):
     email: str
     password: str
 
+
 class LoginRequest(BaseModel):
     email: str
     password: str
 
+
 class ChatRequest(BaseModel):
     message: str
+    client_id: Optional[str] = None  # <-- AGGIUNTO (FREE)
     project_id: Optional[int] = None
     mic_used: Optional[bool] = False
+
 
 class ProjectCreateRequest(BaseModel):
     name: str
     type: str  # BOOK/COACH/CODER/GENERAL
 
-class ProjectSelectRequest(BaseModel):
-    project_id: int
 
 class ImageRequest(BaseModel):
     prompt: str
+    client_id: Optional[str] = None  # <-- AGGIUNTO (FREE)
+
 
 class VideoRequest(BaseModel):
     prompt: str
+    client_id: Optional[str] = None  # <-- AGGIUNTO (FREE)
+
 
 # -------------------------
 # APP
@@ -404,7 +492,10 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://bobmoukhlis-hash.github.io"
+        "https://obmoukhlish-hash.github.io",
+        "https://bobmoukhlis-hash.github.io",
+        "http://localhost:3000",
+        "http://localhost:5500",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -415,12 +506,14 @@ app.add_middleware(
 def root():
     return {"status": "ok"}
 
+
 @app.get("/health")
 def health():
     return {"status": "ok", "model": MODEL}
 
+
 # -------------------------
-# AUTH ROUTES
+# AUTH ROUTES (Premium)
 # -------------------------
 @app.post("/auth/signup")
 def signup(req: SignupRequest):
@@ -439,6 +532,7 @@ def signup(req: SignupRequest):
 
     return {"ok": True}
 
+
 @app.post("/auth/login")
 def login(req: LoginRequest):
     email = req.email.strip().lower()
@@ -449,40 +543,41 @@ def login(req: LoginRequest):
         return {"ok": False, "error": "Credenziali errate."}
 
     token = new_token()
-    DB.execute("INSERT INTO tokens (token, user_id, created_at, last_seen) VALUES (?,?,?,?)",
-               (token, int(row[0]), now_ts(), now_ts()))
+    DB.execute(
+        "INSERT INTO tokens (token, user_id, created_at, last_seen) VALUES (?,?,?,?)",
+        (token, int(row[0]), now_ts(), now_ts()),
+    )
     DB.commit()
 
     return {"ok": True, "token": token, "premium": bool(int(row[2]) == 1), "email": email}
 
+
 @app.get("/me")
 def me(authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
+    user_id, premium = auth_user_required(authorization)
     email = DB.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()[0]
     return {"ok": True, "email": email, "premium": premium, "usage": usage_snapshot(user_id), "limits": LIMITS_FREE}
+
 
 # -------------------------
 # PREMIUM (NO WEBHOOK) - ADMIN MANUAL
 # -------------------------
 @app.post("/premium/admin_set")
 def admin_set_premium(email: str = Form(...), premium: int = Form(...), admin_key: str = Form(...)):
-    """
-    Imposta PREMIUM manualmente.
-    Su Render imposta env ADMIN_KEY e usalo qui per sicurezza.
-    """
-    ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
-    if not ADMIN_KEY or admin_key != ADMIN_KEY:
+    admin_env = os.getenv("ADMIN_KEY", "").strip()
+    if not admin_env or admin_key != admin_env:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     set_premium_by_email(email, 1 if premium else 0)
     return {"ok": True}
 
+
 # -------------------------
-# PROJECTS
+# PROJECTS (Premium only)
 # -------------------------
 @app.post("/projects/create")
 def projects_create(req: ProjectCreateRequest, authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
+    user_id, premium = auth_user_required(authorization)
     name = (req.name or "").strip() or "Progetto"
     ptype = (req.type or "GENERAL").strip().upper()
     if ptype not in {"BOOK", "COACH", "CODER", "GENERAL"}:
@@ -504,9 +599,10 @@ def projects_create(req: ProjectCreateRequest, authorization: Optional[str] = He
     DB.commit()
     return {"ok": True, "project_id": int(cur.lastrowid)}
 
+
 @app.get("/projects/list")
 def projects_list(authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
+    user_id, premium = auth_user_required(authorization)
     rows = DB.execute(
         "SELECT id, name, type, state, updated_at FROM projects WHERE user_id=? ORDER BY updated_at DESC",
         (user_id,),
@@ -516,8 +612,9 @@ def projects_list(authorization: Optional[str] = Header(default=None)):
         projects.append({"id": int(r[0]), "name": r[1], "type": r[2], "state": kv_load(r[3]), "updated_at": int(r[4])})
     return {"ok": True, "projects": projects}
 
+
 # -------------------------
-# CHAT
+# CHAT (FREE without token, Premium with token)
 # -------------------------
 def last_messages(user_id: int, project_id: Optional[int], limit: int = 8) -> List[Dict[str, str]]:
     if project_id:
@@ -533,48 +630,62 @@ def last_messages(user_id: int, project_id: Optional[int], limit: int = 8) -> Li
     rows = list(rows)[::-1]
     return [{"role": "user" if r[0] == "user" else "assistant", "content": r[1]} for r in rows]
 
+
 @app.post("/chat")
 def chat(req: ChatRequest, authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
+    client_id = (req.client_id or "").strip() or "client_anon"
+    user_id, premium = auth_user_optional(authorization)
 
-    # limit
-    if not can_use(user_id, premium, "chat"):
-        return {"text": "LIMITE GIORNALIERO CHAT RAGGIUNTO. PASSA A PREMIUM PER ILLIMITATO."}
+    # LIMITS
+    if user_id is not None:
+        if not can_use_user(user_id, premium, "chat"):
+            return {"text": "LIMITE GIORNALIERO CHAT RAGGIUNTO. PASSA A PREMIUM PER ILLIMITATO."}
+    else:
+        if not free_can_use(client_id, "chat"):
+            return {"text": "LIMITE CHAT FREE RAGGIUNTO. PASSA A PREMIUM PER CONTINUARE."}
 
     user_text = (req.message or "").strip()
     if not user_text:
         return {"text": "SCRIVI QUALCOSA E PARTO SUBITO."}
 
     if req.mic_used:
-        if can_use(user_id, premium, "mic"):
-            inc_use(user_id, "mic")
+        if user_id is not None:
+            if can_use_user(user_id, premium, "mic"):
+                inc_use_user(user_id, "mic")
+        else:
+            if free_can_use(client_id, "mic"):
+                free_inc_use(client_id, "mic")
 
-    project_id = req.project_id
+    project_id = req.project_id if user_id is not None else None  # FREE non salva su progetti server
 
-    # project bias
-    if project_id:
+    # project bias (Premium)
+    if user_id is not None and project_id:
         pr = DB.execute("SELECT type, state FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone()
         if pr:
             ptype = pr[0]
             state = kv_load(pr[1])
-            # book continue logic
             if ptype == "BOOK":
                 if user_text.lower() in {"continua", "vai avanti", "prosegui", "avanti", "ok"}:
                     ch = int(state.get("chapter", "1"))
                     ch += 1
                     state["chapter"] = str(ch)
-                    DB.execute("UPDATE projects SET state=?, updated_at=? WHERE id=? AND user_id=?",
-                               (kv_dump(state), now_ts(), project_id, user_id))
+                    DB.execute(
+                        "UPDATE projects SET state=?, updated_at=? WHERE id=? AND user_id=?",
+                        (kv_dump(state), now_ts(), project_id, user_id),
+                    )
                     DB.commit()
                     user_text = f"CONTINUA IL LIBRO DAL CAPITOLO {ch} MANTENENDO TRAMA E STILE COERENTI."
                 elif "inizia" in user_text.lower() and "libro" in user_text.lower():
                     state["chapter"] = "1"
-                    DB.execute("UPDATE projects SET state=?, updated_at=? WHERE id=? AND user_id=?",
-                               (kv_dump(state), now_ts(), project_id, user_id))
+                    DB.execute(
+                        "UPDATE projects SET state=?, updated_at=? WHERE id=? AND user_id=?",
+                        (kv_dump(state), now_ts(), project_id, user_id),
+                    )
                     DB.commit()
 
     intent = detect_intent(user_text)
-    if project_id:
+
+    if user_id is not None and project_id:
         pr = DB.execute("SELECT type FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone()
         if pr:
             ptype = pr[0]
@@ -587,38 +698,55 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(default=None)):
 
     sys = pick_prompt(intent) + "\n" + language_rule(user_text)
 
-    history = last_messages(user_id, project_id, limit=8)
-    messages = [{"role": "system", "content": sys}]
-    for m in history[-4:]:
-        messages.append(m)
+    messages: List[Dict[str, str]] = [{"role": "system", "content": sys}]
+
+    # Premium history only
+    if user_id is not None:
+        history = last_messages(user_id, project_id, limit=8)
+        for m in history[-4:]:
+            messages.append(m)
+
     messages.append({"role": "user", "content": user_text})
 
-    DB.execute(
-        "INSERT INTO messages (user_id, project_id, role, content, created_at) VALUES (?,?,?,?,?)",
-        (user_id, project_id, "user", user_text, now_ts()),
-    )
-    DB.commit()
+    # save user message (Premium only)
+    if user_id is not None:
+        DB.execute(
+            "INSERT INTO messages (user_id, project_id, role, content, created_at) VALUES (?,?,?,?,?)",
+            (user_id, project_id, "user", user_text, now_ts()),
+        )
+        DB.commit()
 
     reply = groq_chat(messages, temperature=0.8, max_tokens=1600)
     reply = clean_text(reply)
 
-    DB.execute(
-        "INSERT INTO messages (user_id, project_id, role, content, created_at) VALUES (?,?,?,?,?)",
-        (user_id, project_id, "assistant", reply, now_ts()),
-    )
-    DB.commit()
+    # save assistant message (Premium only)
+    if user_id is not None:
+        DB.execute(
+            "INSERT INTO messages (user_id, project_id, role, content, created_at) VALUES (?,?,?,?,?)",
+            (user_id, project_id, "assistant", reply, now_ts()),
+        )
+        DB.commit()
+        inc_use_user(user_id, "chat")
+    else:
+        free_inc_use(client_id, "chat")
 
-    inc_use(user_id, "chat")
     return {"text": reply}
 
+
 # -------------------------
-# IMAGE
+# IMAGE (FREE without token, Premium with token)
 # -------------------------
 @app.post("/image")
 def image(req: ImageRequest, authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
-    if not can_use(user_id, premium, "image"):
-        return {"url": "", "error": "LIMITE IMMAGINI GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    client_id = (req.client_id or "").strip() or "client_anon"
+    user_id, premium = auth_user_optional(authorization)
+
+    if user_id is not None:
+        if not can_use_user(user_id, premium, "image"):
+            return {"url": "", "error": "LIMITE IMMAGINI GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    else:
+        if not free_can_use(client_id, "image"):
+            return {"url": "", "error": "LIMITE IMMAGINI FREE RAGGIUNTO. PASSA A PREMIUM."}
 
     prompt = (req.prompt or "").strip()
     if not prompt:
@@ -628,17 +756,28 @@ def image(req: ImageRequest, authorization: Optional[str] = Header(default=None)
     img_bytes = pollinations_image(safe_prompt)
     b64 = base64.b64encode(img_bytes).decode("utf-8")
 
-    inc_use(user_id, "image")
+    if user_id is not None:
+        inc_use_user(user_id, "image")
+    else:
+        free_inc_use(client_id, "image")
+
     return {"url": f"data:image/png;base64,{b64}"}
 
+
 # -------------------------
-# VIDEO (GIF 3 scene)
+# VIDEO (GIF 3 scene) (FREE without token, Premium with token)
 # -------------------------
 @app.post("/video")
 def video(req: VideoRequest, authorization: Optional[str] = Header(default=None)):
-    user_id, premium = auth_user(authorization)
-    if not can_use(user_id, premium, "video"):
-        return {"url": "", "error": "LIMITE VIDEO GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    client_id = (req.client_id or "").strip() or "client_anon"
+    user_id, premium = auth_user_optional(authorization)
+
+    if user_id is not None:
+        if not can_use_user(user_id, premium, "video"):
+            return {"url": "", "error": "LIMITE VIDEO GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    else:
+        if not free_can_use(client_id, "video"):
+            return {"url": "", "error": "LIMITE VIDEO FREE RAGGIUNTO. PASSA A PREMIUM."}
 
     prompt = (req.prompt or "").strip()
     if not prompt:
@@ -652,22 +791,34 @@ def video(req: VideoRequest, authorization: Optional[str] = Header(default=None)
     gif_bytes = make_gif(prompts, duration_ms=850)
     b64 = base64.b64encode(gif_bytes).decode("utf-8")
 
-    inc_use(user_id, "video")
+    if user_id is not None:
+        inc_use_user(user_id, "video")
+    else:
+        free_inc_use(client_id, "video")
+
     return {"url": f"data:image/gif;base64,{b64}"}
 
+
 # -------------------------
-# ANALYZE (PDF)
+# ANALYZE (PDF) (FREE without token, Premium with token)
 # -------------------------
 @app.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
     prompt: str = Form(...),
     project_id: str = Form(""),
+    client_id: str = Form("client_anon"),  # <-- AGGIUNTO (FREE)
     authorization: Optional[str] = Header(default=None),
 ):
-    user_id, premium = auth_user(authorization)
-    if not can_use(user_id, premium, "pdf"):
-        return {"text": "LIMITE PDF GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    client_id = (client_id or "").strip() or "client_anon"
+    user_id, premium = auth_user_optional(authorization)
+
+    if user_id is not None:
+        if not can_use_user(user_id, premium, "pdf"):
+            return {"text": "LIMITE PDF GIORNALIERO RAGGIUNTO. PASSA A PREMIUM."}
+    else:
+        if not free_can_use(client_id, "pdf"):
+            return {"text": "LIMITE PDF FREE RAGGIUNTO. PASSA A PREMIUM."}
 
     prompt = (prompt or "").strip()
     if not prompt:
@@ -691,5 +842,9 @@ async def analyze(
     reply = groq_chat(msgs, temperature=0.4, max_tokens=1400)
     reply = clean_text(reply)
 
-    inc_use(user_id, "pdf")
+    if user_id is not None:
+        inc_use_user(user_id, "pdf")
+    else:
+        free_inc_use(client_id, "pdf")
+
     return {"text": reply}
