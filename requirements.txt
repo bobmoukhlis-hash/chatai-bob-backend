@@ -1,7 +1,9 @@
+
 fastapi
-uvicorn
+uvicorn[standard]
 requests
 python-multipart
-passlib[bcrypt]
 pillow
+groq
+passlib[bcrypt]
 PyPDF2
