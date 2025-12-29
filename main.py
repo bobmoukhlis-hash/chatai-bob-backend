@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from groq import Groq
 from PIL import Image
 
+
 app = FastAPI()
 
 app.add_middleware(
@@ -22,27 +23,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- ENV ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
 ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
 
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
-HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", "stabilityai/sdxl-turbo").strip()
+HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", "stabilityai/stable-diffusion-2-1").strip()
 HF_VISION_MODEL = os.getenv("HF_VISION_MODEL", "Salesforce/blip-image-captioning-large").strip()
 
 groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"} if HF_API_KEY else {}
-
 HF_TIMEOUT = 60
 
 
+# --- HEALTH ---
 @app.get("/health")
 def health():
     ok = bool(GROQ_API_KEY) and bool(HF_API_KEY)
     return {"status": "ok", "keys": "ok" if ok else "missing"}
 
 
+# --- CHAT ---
 class ChatReq(BaseModel):
     message: str
     client_id: str
@@ -66,6 +69,7 @@ def chat(req: ChatReq):
         return {"text": "Servizio non disponibile."}
 
 
+# --- HELPERS ---
 def style_prompt(style: str) -> str:
     s = (style or "").strip().lower()
     if s == "anime":
@@ -90,16 +94,10 @@ def hf_image_bytes(prompt: str) -> tuple[Optional[bytes], Optional[str]]:
         return None, "Errore rete HuggingFace"
 
     if r.status_code != 200:
-        detail = (r.text or "").strip()
-        if len(detail) > 300:
-            detail = detail[:300] + "..."
         return None, f"Errore HuggingFace ({r.status_code})"
 
     ctype = (r.headers.get("content-type") or "").lower()
     if "image" not in ctype:
-        detail = (r.text or "").strip()
-        if len(detail) > 300:
-            detail = detail[:300] + "..."
         return None, "HuggingFace non ha restituito un'immagine"
 
     return r.content, None
@@ -120,6 +118,7 @@ def bytes_to_data_png(img_bytes: bytes) -> tuple[Optional[str], Optional[str]]:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(), None
 
 
+# --- IMAGE ---
 class ImageReq(BaseModel):
     prompt: str
     client_id: str
@@ -142,6 +141,7 @@ def image(req: ImageReq):
     return {"url": url}
 
 
+# --- VIDEO (GIF) ---
 class VideoReq(BaseModel):
     prompt: str
     client_id: str
@@ -166,9 +166,6 @@ def video(req: VideoReq):
 
         frames.append(frame)
 
-    if not frames:
-        return {"error": "Errore generazione GIF"}
-
     out = io.BytesIO()
     try:
         frames[0].save(
@@ -185,6 +182,7 @@ def video(req: VideoReq):
     return {"url": "data:image/gif;base64," + base64.b64encode(out.getvalue()).decode()}
 
 
+# --- ANALYZE PHOTO ---
 @app.post("/analyze_photo")
 async def analyze_photo(
     file: UploadFile = File(...),
@@ -215,7 +213,7 @@ async def analyze_photo(
         return {"text": "Errore analisi immagine"}
 
     caption = ""
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+    if isinstance(data, list) and data and isinstance(data[0], dict):
         caption = str(data[0].get("generated_text", "")).strip()
 
     if not caption:
