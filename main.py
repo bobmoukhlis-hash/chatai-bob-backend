@@ -1,105 +1,304 @@
+# main.py
 from __future__ import annotations
 
+import io
 import os
-from fastapi import FastAPI
+import sqlite3
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import requests
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from groq import Groq
+from pydantic import BaseModel
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+# =========================
+# CONFIG (ENV)
+# =========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
+SQLITE_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
 
-SYSTEM_PROMPT = """
+HF_VISION_MODEL = os.getenv(
+    "HF_VISION_MODEL",
+    "Salesforce/blip-image-captioning-large",
+).strip()
+
+HF_TIMEOUT = int(os.getenv("HF_TIMEOUT", "60").strip() or "60")
+
+SYSTEM_PROMPT = os.getenv(
+    "SYSTEM_PROMPT",
+    """
 Sei ChatAI Bob, un assistente di intelligenza artificiale avanzato, affidabile e professionale.
 
 CARATTERISTICHE PRINCIPALI:
 - Rispondi in modo chiaro, naturale, educato e molto dettagliato
-- Adatti automaticamente la lingua a quella dell’utente
-- Mantieni il contesto della conversazione
-- Spiega passo dopo passo se la domanda è complessa
-- Scrivi codice pulito, commentato e funzionante
-- Usa esempi chiari
-- Non inventare informazioni
+- Adatti automaticamente la lingua a quella dell’utente (italiano, inglese, francese, spagnolo, ecc.)
+- Se l’utente scrive in una lingua, rispondi nella stessa lingua
+- Se la domanda è vaga, chiedi chiarimenti intelligenti
+- Se la domanda è complessa, spiega passo dopo passo
+- Se l’utente chiede codice, fornisci codice pulito, commentato e funzionante
+- Se l’utente chiede spiegazioni, usa esempi semplici e concreti
+- Non inventare informazioni: se non sei sicuro, dillo chiaramente
 
 COMPORTAMENTO:
-- Amichevole ma professionale
-- Niente arroganza
-- Emoji solo se utili
-- Mai parlare di API, modelli o limiti
+- Sei amichevole ma professionale
+- Non sei arrogante
+- Non usi emoji in modo eccessivo
+- Non parli mai di limiti tecnici o costi
+- Non menzioni API, modelli o provider
 
 OBIETTIVO:
-Aiutare l’utente come farebbe un vero esperto umano.
-""".strip()
+Aiutare l’utente nel miglior modo possibile, come un vero esperto umano.
+""".strip(),
+).strip()
 
-# -----------------------------
+VISION_PROMPT = os.getenv(
+    "VISION_PROMPT",
+    """
+Sei ChatAI Bob. Devi aiutare l’utente a capire una FOTO.
+Ti verrà dato:
+- una DESCRIZIONE dell’immagine (caption)
+- un’eventuale DOMANDA dell’utente
+
+REGOLE:
+- Rispondi nella lingua dell’utente.
+- Se la domanda è presente: rispondi direttamente e in modo pratico.
+- Se la domanda è vuota: descrivi l’immagine in modo utile e ordinato.
+- Se la caption è troppo generica: dillo con onestà e suggerisci cosa chiedere o che foto caricare.
+- Non inventare dettagli non supportati dalla caption.
+""".strip(),
+).strip()
+
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+HF_HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"} if HF_API_KEY else {}
+
+# =========================
+# DB (SQLite) — Memoria per client_id
+# =========================
+def now_ts() -> int:
+    return int(time.time())
+
+
+def db_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS convo_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+DB = db_connect()
+
+
+def save_msg(client_id: str, role: str, content: str) -> None:
+    DB.execute(
+        "INSERT INTO convo_messages (client_id, role, content, created_at) VALUES (?,?,?,?)",
+        (client_id, role, content, now_ts()),
+    )
+    DB.commit()
+
+
+def load_history(client_id: str, limit: int = 12) -> List[Dict[str, str]]:
+    rows = DB.execute(
+        """
+        SELECT role, content
+        FROM convo_messages
+        WHERE client_id=?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (client_id, limit),
+    ).fetchall()
+    rows = list(rows)[::-1]
+    out: List[Dict[str, str]] = []
+    for role, content in rows:
+        if role == "user":
+            out.append({"role": "user", "content": str(content)})
+        else:
+            out.append({"role": "assistant", "content": str(content)})
+    return out
+
+
+def clear_history(client_id: str) -> None:
+    DB.execute("DELETE FROM convo_messages WHERE client_id=?", (client_id,))
+    DB.commit()
+
+
+# =========================
 # APP
-# -----------------------------
+# =========================
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # ok per GitHub Pages / WebView
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# -----------------------------
-# MEMORIA (RAM)
-# -----------------------------
-MEMORY: dict[str, list[dict]] = {}
-MAX_HISTORY = 12   # numero messaggi ricordati
-
-# -----------------------------
-# API
-# -----------------------------
 @app.get("/health")
-def health():
-    return {"status": "ok" if GROQ_API_KEY else "missing"}
+def health() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "groq": "ok" if bool(GROQ_API_KEY) else "missing",
+        "hf": "ok" if bool(HF_API_KEY) else "missing",
+        "model": MODEL,
+        "vision_model": HF_VISION_MODEL,
+    }
 
+
+# =========================
+# CHAT
+# =========================
 class ChatReq(BaseModel):
     message: str
     client_id: str
 
+
 @app.post("/chat")
-def chat(req: ChatReq):
-    if not groq:
-        return {"error": "Backend non configurato"}
+def chat(req: ChatReq) -> Dict[str, str]:
+    if not groq_client:
+        return {"text": "Servizio non disponibile al momento."}
 
-    cid = req.client_id
+    client_id = (req.client_id or "").strip() or "client_anon"
+    user_text = (req.message or "").strip()
+    if not user_text:
+        return {"text": "Scrivi un messaggio e rispondo subito."}
 
-    # inizializza memoria utente
-    if cid not in MEMORY:
-        MEMORY[cid] = []
+    history = load_history(client_id, limit=12)
 
-    # aggiungi messaggio utente
-    MEMORY[cid].append({"role": "user", "content": req.message})
-
-    # limita memoria
-    MEMORY[cid] = MEMORY[cid][-MAX_HISTORY:]
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + MEMORY[cid]
+    messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
 
     try:
-        res = groq.chat.completions.create(
+        res = groq_client.chat.completions.create(
             model=MODEL,
             messages=messages,
             temperature=0.7,
             max_tokens=900,
         )
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a rispondere in questo momento."
 
-        answer = res.choices[0].message.content
+        save_msg(client_id, "user", user_text)
+        save_msg(client_id, "assistant", reply)
 
-        # salva risposta AI
-        MEMORY[cid].append({"role": "assistant", "content": answer})
-        MEMORY[cid] = MEMORY[cid][-MAX_HISTORY:]
-
-        return {"text": answer}
-
+        return {"text": reply}
     except Exception:
-        return {"error": "Servizio non disponibile. Riprova tra poco."}
+        return {"text": "Servizio non disponibile. Riprova tra poco."}
+
+
+# =========================
+# CLEAR MEMORY (opzionale)
+# =========================
+class ClearReq(BaseModel):
+    client_id: str
+
+
+@app.post("/clear")
+def clear(req: ClearReq) -> Dict[str, Any]:
+    client_id = (req.client_id or "").strip() or "client_anon"
+    clear_history(client_id)
+    return {"ok": True}
+
+
+# =========================
+# ANALISI FOTO
+# =========================
+def hf_caption_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
+    if not HF_API_KEY:
+        return None, "Servizio non disponibile al momento."
+
+    try:
+        r = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_VISION_MODEL}",
+            headers=HF_HEADERS,
+            files={"file": ("image.jpg", image_bytes, "application/octet-stream")},
+            timeout=HF_TIMEOUT,
+        )
+    except Exception:
+        return None, "Errore rete durante l’analisi."
+
+    if r.status_code != 200:
+        return None, "Analisi immagine non disponibile al momento."
+
+    try:
+        data = r.json()
+    except Exception:
+        return None, "Analisi immagine non disponibile al momento."
+
+    caption = ""
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        caption = str(data[0].get("generated_text", "")).strip()
+
+    if not caption:
+        return None, "Non riesco a leggere bene questa immagine."
+
+    return caption, None
+
+
+@app.post("/analyze_photo")
+async def analyze_photo(
+    file: UploadFile = File(...),
+    question: str = Form(""),
+    client_id: str = Form("client_anon"),
+) -> Dict[str, str]:
+    if not groq_client:
+        return {"text": "Servizio non disponibile al momento."}
+
+    img_bytes = await file.read()
+    if not img_bytes:
+        return {"text": "File vuoto. Riprova con un’altra foto."}
+
+    caption, err = hf_caption_image(img_bytes)
+    if err:
+        return {"text": err}
+
+    q = (question or "").strip()
+    client_id = (client_id or "").strip() or "client_anon"
+
+    user_block = f"DESCRIZIONE IMMAGINE: {caption}"
+    if q:
+        user_block += f"\nDOMANDA UTENTE: {q}"
+
+    messages = [
+        {"role": "system", "content": VISION_PROMPT},
+        {"role": "user", "content": user_block},
+    ]
+
+    try:
+        res = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=700,
+        )
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a rispondere in questo momento."
+
+        # opzionale: salva in memoria anche questa parte
+        save_msg(client_id, "user", f"[FOTO] {q or 'Analizza immagine'}")
+        save_msg(client_id, "assistant", reply)
+
+        return {"text": reply}
+    except Exception:
+        return {"text": "Errore durante l’analisi. Riprova tra poco."}
