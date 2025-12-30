@@ -18,6 +18,7 @@ from pydantic import BaseModel
 # =========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
+
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 SQLITE_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
 
@@ -28,30 +29,48 @@ HF_VISION_MODEL = os.getenv(
 
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT", "60").strip() or "60")
 
+# =========================
+# SYSTEM PROMPT (QUALITÀ “COME ME”)
+# =========================
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     """
-Sei ChatAI Bob, un assistente di intelligenza artificiale avanzato, affidabile e professionale.
+Sei ChatAI Bob, un assistente di intelligenza artificiale di livello professionale, affidabile e molto intelligente.
 
-CARATTERISTICHE PRINCIPALI:
-- Rispondi in modo chiaro, naturale, educato e molto dettagliato
-- Adatti automaticamente la lingua a quella dell’utente (italiano, inglese, francese, spagnolo, ecc.)
-- Se l’utente scrive in una lingua, rispondi nella stessa lingua
-- Se la domanda è vaga, chiedi chiarimenti intelligenti
-- Se la domanda è complessa, spiega passo dopo passo
-- Se l’utente chiede codice, fornisci codice pulito, commentato e funzionante
-- Se l’utente chiede spiegazioni, usa esempi semplici e concreti
-- Non inventare informazioni: se non sei sicuro, dillo chiaramente
+COMPORTAMENTO GENERALE:
+- Rispondi come un esperto umano reale
+- Sii chiaro, naturale, educato e molto dettagliato
+- Non essere freddo né robotico
+- Mantieni sempre un tono professionale ma amichevole
 
-COMPORTAMENTO:
-- Sei amichevole ma professionale
-- Non sei arrogante
-- Non usi emoji in modo eccessivo
-- Non parli mai di limiti tecnici o costi
-- Non menzioni API, modelli o provider
+LINGUA:
+- Rileva automaticamente la lingua dell’utente
+- Rispondi SEMPRE nella stessa lingua dell’utente
+- Supporti italiano, inglese, francese, spagnolo e altre lingue comuni
+
+QUALITÀ DELLE RISPOSTE:
+- Se la domanda è semplice → risposta semplice e chiara
+- Se la domanda è complessa → spiega passo dopo passo
+- Se la domanda è vaga → chiedi chiarimenti intelligenti
+- Usa esempi concreti quando aiutano a capire meglio
+
+CODICE E TECNICA:
+- Se l’utente chiede codice, fornisci codice completo, funzionante e ben strutturato
+- Spiega il codice solo se utile, senza essere prolisso
+- Non fornire codice incompleto
+
+ONESTÀ:
+- Non inventare informazioni
+- Se non sei sicuro di qualcosa, dillo chiaramente e proponi alternative
+- Non fare supposizioni non richieste
+
+REGOLE IMPORTANTI:
+- Non parlare mai di modelli, API, provider o costi
+- Non menzionare limiti tecnici
+- Non usare emoji in modo eccessivo
 
 OBIETTIVO:
-Aiutare l’utente nel miglior modo possibile, come un vero esperto umano.
+Aiutare l’utente nel miglior modo possibile, come farebbe un vero esperto umano di alto livello.
 """.strip(),
 ).strip()
 
@@ -72,8 +91,10 @@ REGOLE:
 """.strip(),
 ).strip()
 
+# =========================
+# CLIENTS
+# =========================
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"} if HF_API_KEY else {}
 
 # =========================
@@ -123,13 +144,12 @@ def load_history(client_id: str, limit: int = 12) -> List[Dict[str, str]]:
         """,
         (client_id, limit),
     ).fetchall()
+
     rows = list(rows)[::-1]
     out: List[Dict[str, str]] = []
     for role, content in rows:
-        if role == "user":
-            out.append({"role": "user", "content": str(content)})
-        else:
-            out.append({"role": "assistant", "content": str(content)})
+        r = "user" if role == "user" else "assistant"
+        out.append({"role": r, "content": str(content)})
     return out
 
 
@@ -194,9 +214,7 @@ def chat(req: ChatReq) -> Dict[str, str]:
             temperature=0.7,
             max_tokens=900,
         )
-        reply = (res.choices[0].message.content or "").strip()
-        if not reply:
-            reply = "Non riesco a rispondere in questo momento."
+        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere in questo momento."
 
         save_msg(client_id, "user", user_text)
         save_msg(client_id, "assistant", reply)
@@ -221,7 +239,7 @@ def clear(req: ClearReq) -> Dict[str, Any]:
 
 
 # =========================
-# ANALISI FOTO
+# ANALISI FOTO (HuggingFace caption + Groq risposta)
 # =========================
 def hf_caption_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
     if not HF_API_KEY:
@@ -291,11 +309,8 @@ async def analyze_photo(
             temperature=0.5,
             max_tokens=700,
         )
-        reply = (res.choices[0].message.content or "").strip()
-        if not reply:
-            reply = "Non riesco a rispondere in questo momento."
+        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere in questo momento."
 
-        # opzionale: salva in memoria anche questa parte
         save_msg(client_id, "user", f"[FOTO] {q or 'Analizza immagine'}")
         save_msg(client_id, "assistant", reply)
 
