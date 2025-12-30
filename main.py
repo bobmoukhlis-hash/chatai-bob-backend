@@ -1,95 +1,74 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
 
-# ================= CONFIG =================
+# -----------------------------
+# CONFIG
+# -----------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
+# Modello consigliato (ottimo in multilingua e qualità)
 MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
 
-SYSTEM_PROMPT = """
-Sei ChatAI Bob.
+# Prompt di sistema: è qui che fai la differenza (qualità “alta”)
+SYSTEM_PROMPT = os.getenv(
+    "SYSTEM_PROMPT",
+    (
+        "Sei ChatAI Bob, un assistente AI estremamente intelligente, educato e naturale. "
+        "Rispondi sempre in modo chiaro, completo e utile. "
+        "Adatta automaticamente la lingua alla lingua dell’utente (multilingua). "
+        "Se l’utente chiede un codice, scrivilo bene e completo. "
+        "Se non sai qualcosa, dillo con onestà e proponi alternative."
+    ),
+).strip()
 
-OBIETTIVO
-Fornisci risposte utili, complete e pratiche. Sii naturale, umano, diretto.
-
-LINGUA
-Rispondi SEMPRE nella lingua dell’utente. Se l’utente mescola lingue, usa quella prevalente. Se non è chiaro, scegli Italiano.
-
-STILE
-- Niente Markdown (niente ** ## ``` ` _ -).
-- Testo pulito, con paragrafi e titoli in MAIUSCOLO quando serve.
-- Non chiedere chiarimenti: se mancano dettagli, fai assunzioni ragionevoli e vai avanti.
-- Evita frasi inutili, vai al punto.
-
-QUALITÀ
-- Dai sempre una risposta “finita”: spiegazione + passi concreti + esempi quando utile.
-- Se l’utente chiede codice: consegna codice completo, pronto da copiare, con istruzioni minime.
-- Se l’utente chiede una guida: fai lista step-by-step e checklist.
-
-SICUREZZA
-- Rifiuta richieste illegali o dannose.
-- Se richiesta ambigua ma rischiosa: sposta su alternativa sicura.
-""".strip()
-
-groq: Optional[Groq] = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
-# ================= APP =================
+# -----------------------------
+# APP
+# -----------------------------
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # se vuoi, più avanti puoi mettere solo il tuo dominio
+    allow_origins=["*"],   # per GitHub Pages / app web
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "model": MODEL,
-        "groq": "ok" if bool(GROQ_API_KEY) else "missing",
-    }
+    ok = bool(GROQ_API_KEY)
+    return {"status": "ok" if ok else "missing"}
+
 
 class ChatReq(BaseModel):
     message: str
     client_id: str
 
-def clean_no_markdown(text: str) -> str:
-    if not text:
-        return ""
-    for b in ["```", "**", "__", "##", "`"]:
-        text = text.replace(b, "")
-    return text.strip()
 
 @app.post("/chat")
 def chat(req: ChatReq):
-    msg = (req.message or "").strip()
-    if not msg:
-        return {"text": "Scrivi qualcosa e rispondo subito."}
-
     if not groq:
-        return {"text": "Servizio non disponibile (chiave Groq mancante)."}
+        return {"error": "Backend non configurato: manca GROQ_API_KEY."}
 
     try:
         res = groq.chat.completions.create(
             model=MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": msg},
+                {"role": "user", "content": req.message},
             ],
-            temperature=0.7,
-            max_tokens=1200,
+            temperature=0.7,  # qualità più “umana”
+            max_tokens=900,   # risposte belle complete
         )
-        out = res.choices[0].message.content
+        text = res.choices[0].message.content
+        return {"text": text}
     except Exception:
-        return {"text": "Servizio non disponibile. Riprova tra poco."}
-
-    return {"text": clean_no_markdown(out)}
+        return {"error": "Servizio non disponibile. Riprova tra poco."}
