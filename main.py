@@ -31,7 +31,7 @@ HF_OCR_MODEL = os.getenv(
     "microsoft/trocr-base-printed",
 ).strip()
 
-HF_TIMEOUT = int(os.getenv("HF_TIMEOUT", "60") or "60")
+HF_TIMEOUT = int((os.getenv("HF_TIMEOUT", "60") or "60").strip())
 
 # =========================
 # SYSTEM PROMPTS
@@ -108,14 +108,19 @@ def load_history(client_id: str, limit: int = 12) -> List[Dict[str, str]]:
     rows = list(rows)[::-1]
     out: List[Dict[str, str]] = []
     for role, content in rows:
-        r = "user" if role == "user" else "assistant"
-        out.append({"role": r, "content": str(content)})
+        out.append(
+            {
+                "role": "user" if role == "user" else "assistant",
+                "content": str(content),
+            }
+        )
     return out
 
 
 def clear_history(client_id: str) -> None:
     DB.execute("DELETE FROM convo_messages WHERE client_id=?", (client_id,))
     DB.commit()
+
 
 # =========================
 # APP
@@ -130,16 +135,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "groq": "ok" if GROQ_API_KEY else "missing",
-        "hf": "ok" if HF_API_KEY else "missing",
+        "groq": "ok" if bool(GROQ_API_KEY) else "missing",
+        "hf": "ok" if bool(HF_API_KEY) else "missing",
         "model": MODEL,
         "vision_model": HF_VISION_MODEL,
         "ocr_model": HF_OCR_MODEL,
     }
+
 
 # =========================
 # CHAT
@@ -154,12 +161,14 @@ def chat(req: ChatReq) -> Dict[str, str]:
     if not groq_client:
         return {"text": "Servizio non disponibile al momento."}
 
-    client_id = req.client_id or "client_anon"
-    user_text = req.message.strip()
+    client_id = (req.client_id or "").strip() or "client_anon"
+    user_text = (req.message or "").strip()
+    if not user_text:
+        return {"text": "Scrivi un messaggio e rispondo subito."}
 
     history = load_history(client_id)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
@@ -170,7 +179,7 @@ def chat(req: ChatReq) -> Dict[str, str]:
             temperature=0.7,
             max_tokens=800,
         )
-        reply = res.choices[0].message.content.strip()
+        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere ora."
 
         save_msg(client_id, "user", user_text)
         save_msg(client_id, "assistant", reply)
@@ -178,6 +187,7 @@ def chat(req: ChatReq) -> Dict[str, str]:
         return {"text": reply}
     except Exception:
         return {"text": "Errore temporaneo. Riprova."}
+
 
 # =========================
 # CLEAR
@@ -188,11 +198,13 @@ class ClearReq(BaseModel):
 
 @app.post("/clear")
 def clear(req: ClearReq) -> Dict[str, bool]:
-    clear_history(req.client_id)
+    client_id = (req.client_id or "").strip() or "client_anon"
+    clear_history(client_id)
     return {"ok": True}
 
+
 # =========================
-# IMAGE CAPTION
+# OCR (funzione)
 # =========================
 def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
     if not HF_API_KEY:
@@ -202,7 +214,7 @@ def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
         r = requests.post(
             f"https://api-inference.huggingface.co/models/{HF_OCR_MODEL}",
             headers=HF_HEADERS,
-            files={"file": ("image.png", image_bytes)},
+            files={"file": ("image.png", image_bytes, "application/octet-stream")},
             timeout=HF_TIMEOUT,
         )
     except Exception:
@@ -218,39 +230,13 @@ def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
 
     text = ""
     if isinstance(data, dict):
-        text = data.get("text", "").strip()
+        text = str(data.get("text", "")).strip()
 
     if not text:
         return None, "Non riesco a leggere il testo nella foto."
 
     return text, None
-# =========================
-# OCR
-# =========================
-def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
-    if not HF_API_KEY:
-        return None, "Servizio OCR non disponibile."
 
-    try:
-        r = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_OCR_MODEL}",
-            headers=HF_HEADERS,
-            files={"file": ("image.png", image_bytes)},
-            timeout=HF_TIMEOUT,
-        )
-    except Exception:
-        return None, "Errore di rete durante OCR."
-
-    if r.status_code != 200:
-        return None, "OCR non disponibile al momento."
-
-    data = r.json()
-    text = data.get("text", "").strip() if isinstance(data, dict) else ""
-
-    if not text:
-        return None, "Non riesco a leggere il testo nella foto."
-
-    return text, None
 
 # =========================
 # OCR ENDPOINT
@@ -261,29 +247,37 @@ async def ocr_photo(
     question: str = Form(""),
     client_id: str = Form("client_anon"),
 ) -> Dict[str, str]:
+    if not groq_client:
+        return {"text": "Servizio non disponibile al momento."}
 
     img_bytes = await file.read()
+    if not img_bytes:
+        return {"text": "File vuoto."}
+
     ocr_text, err = hf_ocr_image(img_bytes)
     if err:
         return {"text": err}
 
-    user_question = question or "Cosa c’è scritto?"
+    client_id = (client_id or "").strip() or "client_anon"
+    user_question = (question or "").strip() or "Cosa c’è scritto?"
 
     messages = [
         {"role": "system", "content": OCR_PROMPT},
-        {"role": "user", "content": f"TESTO:\n{ocr_text}\n\nDOMANDA:\n{user_question}"},
+        {"role": "user", "content": f"TESTO OCR:\n{ocr_text}\n\nDOMANDA UTENTE:\n{user_question}"},
     ]
 
-    res = groq_client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=0.3,
-        max_tokens=600,
-    )
+    try:
+        res = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=600,
+        )
+        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere ora."
 
-    reply = res.choices[0].message.content.strip()
+        save_msg(client_id, "user", f"[OCR] {user_question}")
+        save_msg(client_id, "assistant", reply)
 
-    save_msg(client_id, "user", "[OCR]")
-    save_msg(client_id, "assistant", reply)
-
-    return {"text": reply}
+        return {"text": reply}
+    except Exception:
+        return {"text": "Errore durante OCR. Riprova tra poco."}
