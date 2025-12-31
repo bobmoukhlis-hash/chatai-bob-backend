@@ -194,31 +194,36 @@ def clear(req: ClearReq) -> Dict[str, bool]:
 # =========================
 # IMAGE CAPTION
 # =========================
-def hf_caption_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
+def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
     if not HF_API_KEY:
-        return None, "Servizio analisi immagine non disponibile."
+        return None, "Servizio OCR non disponibile."
 
     try:
         r = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_VISION_MODEL}",
+            f"https://api-inference.huggingface.co/models/{HF_OCR_MODEL}",
             headers=HF_HEADERS,
-            files={"file": ("image.jpg", image_bytes)},
+            files={"file": ("image.png", image_bytes)},
             timeout=HF_TIMEOUT,
         )
     except Exception:
-        return None, "Errore di rete."
+        return None, "Errore di rete durante OCR."
 
     if r.status_code != 200:
-        return None, "Analisi immagine non disponibile."
+        return None, "OCR non disponibile al momento."
 
-    data = r.json()
-    caption = data[0].get("generated_text", "").strip() if isinstance(data, list) else ""
+    try:
+        data = r.json()
+    except Exception:
+        return None, "Risposta OCR non valida."
 
-    if not caption:
-        return None, "Non riesco a capire questa immagine."
+    text = ""
+    if isinstance(data, dict):
+        text = data.get("text", "").strip()
 
-    return caption, None
+    if not text:
+        return None, "Non riesco a leggere il testo nella foto."
 
+    return text, None
 # =========================
 # OCR
 # =========================
