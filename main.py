@@ -258,7 +258,55 @@ def clear(req: ClearReq) -> Dict[str, Any]:
 # =========================
 # ANALISI FOTO (Caption)
 # =========================
-def hf_caption_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
+import time
+
+def hf_ocr_image(image_bytes: bytes) -> tuple[str | None, str | None]:
+    if not HF_API_KEY:
+        return None, "Servizio OCR non disponibile."
+
+    MAX_RETRIES = 3        # quante volte riprova
+    WAIT_SECONDS = 2       # attesa tra i tentativi
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = requests.post(
+                f"https://api-inference.huggingface.co/models/{HF_OCR_MODEL}",
+                headers=HF_HEADERS,
+                files={"file": ("image.png", image_bytes)},
+                timeout=HF_TIMEOUT,
+            )
+        except Exception:
+            if attempt == MAX_RETRIES:
+                return None, "Errore di rete durante OCR."
+            time.sleep(WAIT_SECONDS)
+            continue
+
+        if r.status_code != 200:
+            if attempt == MAX_RETRIES:
+                return None, "OCR non disponibile al momento."
+            time.sleep(WAIT_SECONDS)
+            continue
+
+        try:
+            data = r.json()
+        except Exception:
+            if attempt == MAX_RETRIES:
+                return None, "Risposta OCR non valida."
+            time.sleep(WAIT_SECONDS)
+            continue
+
+        text = ""
+        if isinstance(data, dict):
+            text = data.get("text", "").strip()
+
+        if text:
+            return text, None   # ✅ SUCCESSO
+
+        # se testo vuoto → riprova
+        if attempt < MAX_RETRIES:
+            time.sleep(WAIT_SECONDS)
+
+    return None, "Non riesco a leggere il testo nella foto." -> Tuple[Optional[str], Optional[str]]:
     if not HF_API_KEY:
         return None, "Servizio non disponibile al momento."
 
