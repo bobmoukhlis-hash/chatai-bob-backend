@@ -1,7 +1,6 @@
 # main.py
 from __future__ import annotations
 
-import io
 import os
 import sqlite3
 import time
@@ -25,6 +24,12 @@ SQLITE_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
 HF_VISION_MODEL = os.getenv(
     "HF_VISION_MODEL",
     "Salesforce/blip-image-captioning-large",
+).strip()
+
+# ✅ OCR model (NUOVO)
+HF_OCR_MODEL = os.getenv(
+    "HF_OCR_MODEL",
+    "microsoft/trocr-base-printed",
 ).strip()
 
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT", "60").strip() or "60")
@@ -65,8 +70,7 @@ REGOLE:
 
 OBIETTIVO:
 Aiutare l’utente nel miglior modo possibile, come farebbe un vero esperto umano.
-""".strip(),
-).strip()
+""".strip()
 
 VISION_PROMPT = os.getenv(
     "VISION_PROMPT",
@@ -82,6 +86,22 @@ REGOLE:
 - Se la domanda è vuota: descrivi l’immagine in modo utile e ordinato.
 - Se la caption è troppo generica: dillo con onestà e suggerisci cosa chiedere o che foto caricare.
 - Non inventare dettagli non supportati dalla caption.
+""".strip(),
+).strip()
+
+OCR_PROMPT = os.getenv(
+    "OCR_PROMPT",
+    """
+Sei ChatAI Bob. Devi aiutare l’utente a capire il TESTO letto da una foto (OCR).
+Ti verrà dato:
+- TESTO ESTRATTO (OCR)
+- un’eventuale DOMANDA dell’utente
+
+REGOLE:
+- Rispondi nella lingua dell’utente.
+- Se l’utente chiede “cosa c’è scritto?”: rispondi riportando il testo in modo pulito.
+- Se il testo è confuso: dillo e chiedi una foto più nitida.
+- Non inventare parti mancanti.
 """.strip(),
 ).strip()
 
@@ -174,6 +194,7 @@ def health() -> Dict[str, Any]:
         "hf": "ok" if bool(HF_API_KEY) else "missing",
         "model": MODEL,
         "vision_model": HF_VISION_MODEL,
+        "ocr_model": HF_OCR_MODEL,
     }
 
 
@@ -208,7 +229,9 @@ def chat(req: ChatReq) -> Dict[str, str]:
             temperature=0.7,
             max_tokens=900,
         )
-        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere in questo momento."
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a rispondere in questo momento."
 
         save_msg(client_id, "user", user_text)
         save_msg(client_id, "assistant", reply)
@@ -233,7 +256,7 @@ def clear(req: ClearReq) -> Dict[str, Any]:
 
 
 # =========================
-# ANALISI FOTO (HuggingFace caption + Groq risposta)
+# ANALISI FOTO (Caption)
 # =========================
 def hf_caption_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
     if not HF_API_KEY:
@@ -303,7 +326,9 @@ async def analyze_photo(
             temperature=0.5,
             max_tokens=700,
         )
-        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere in questo momento."
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a rispondere in questo momento."
 
         save_msg(client_id, "user", f"[FOTO] {q or 'Analizza immagine'}")
         save_msg(client_id, "assistant", reply)
@@ -311,3 +336,87 @@ async def analyze_photo(
         return {"text": reply}
     except Exception:
         return {"text": "Errore durante l’analisi. Riprova tra poco."}
+
+
+# =========================
+# OCR (Legge testo nella foto) ✅ NUOVO
+# =========================
+def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
+    if not HF_API_KEY:
+        return None, "Servizio OCR non disponibile."
+
+    try:
+        r = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_OCR_MODEL}",
+            headers=HF_HEADERS,
+            files={"file": ("image.png", image_bytes, "application/octet-stream")},
+            timeout=HF_TIMEOUT,
+        )
+    except Exception:
+        return None, "Errore di rete durante OCR."
+
+    if r.status_code != 200:
+        return None, "OCR non disponibile al momento."
+
+    try:
+        data = r.json()
+    except Exception:
+        return None, "Risposta OCR non valida."
+
+    text = ""
+    if isinstance(data, dict):
+        text = str(data.get("text", "")).strip()
+
+    if not text:
+        return None, "Non riesco a leggere il testo nella foto."
+
+    return text, None
+
+
+@app.post("/ocr_photo")
+async def ocr_photo(
+    file: UploadFile = File(...),
+    question: str = Form(""),
+    client_id: str = Form("client_anon"),
+) -> Dict[str, str]:
+    if not groq_client:
+        return {"text": "Servizio non disponibile al momento."}
+
+    img_bytes = await file.read()
+    if not img_bytes:
+        return {"text": "File vuoto."}
+
+    ocr_text, err = hf_ocr_image(img_bytes)
+    if err:
+        return {"text": err}
+
+    q = (question or "").strip()
+    client_id = (client_id or "").strip() or "client_anon"
+
+    # Se l'utente non fa domanda, default: "cosa c'è scritto?"
+    user_question = q or "Cosa c’è scritto in questa immagine?"
+
+    user_block = f"TESTO OCR:\n{ocr_text}\n\nDOMANDA UTENTE: {user_question}"
+
+    messages = [
+        {"role": "system", "content": OCR_PROMPT},
+        {"role": "user", "content": user_block},
+    ]
+
+    try:
+        res = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=600,
+        )
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a rispondere in questo momento."
+
+        save_msg(client_id, "user", f"[OCR] {user_question}")
+        save_msg(client_id, "assistant", reply)
+
+        return {"text": reply}
+    except Exception:
+        return {"text": "Errore durante OCR. Riprova tra poco."}
