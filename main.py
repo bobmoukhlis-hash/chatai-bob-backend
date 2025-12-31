@@ -236,36 +236,43 @@ def hf_ocr_image(image_bytes: bytes) -> Tuple[Optional[str], Optional[str]]:
         return None, "Non riesco a leggere il testo nella foto."
 
     return text, None
-
-
 # =========================
-# OCR ENDPOINT
+# OCR ENDPOINT (CORRETTO)
 # =========================
 @app.post("/ocr_photo")
 async def ocr_photo(
     file: UploadFile = File(...),
     question: str = Form(""),
     client_id: str = Form("client_anon"),
-) -> Dict[str, str]:
+):
+    # 1️⃣ controllo servizio AI
     if not groq_client:
         return {"text": "Servizio non disponibile al momento."}
 
+    # 2️⃣ leggo il file UNA SOLA VOLTA
     img_bytes = await file.read()
     if not img_bytes:
         return {"text": "File vuoto."}
 
+    # 3️⃣ OCR HuggingFace
     ocr_text, err = hf_ocr_image(img_bytes)
     if err:
         return {"text": err}
 
+    # 4️⃣ preparo dati utente
     client_id = (client_id or "").strip() or "client_anon"
     user_question = (question or "").strip() or "Cosa c’è scritto?"
 
+    # 5️⃣ prompt per Groq
     messages = [
         {"role": "system", "content": OCR_PROMPT},
-        {"role": "user", "content": f"TESTO OCR:\n{ocr_text}\n\nDOMANDA UTENTE:\n{user_question}"},
+        {
+            "role": "user",
+            "content": f"TESTO OCR:\n{ocr_text}\n\nDOMANDA UTENTE:\n{user_question}",
+        },
     ]
 
+    # 6️⃣ chiamata Groq
     try:
         res = groq_client.chat.completions.create(
             model=MODEL,
@@ -273,11 +280,17 @@ async def ocr_photo(
             temperature=0.3,
             max_tokens=600,
         )
-        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere ora."
 
+        reply = (res.choices[0].message.content or "").strip()
+        if not reply:
+            reply = "Non riesco a spiegare il testo al momento."
+
+        # 7️⃣ salvo storico
         save_msg(client_id, "user", f"[OCR] {user_question}")
         save_msg(client_id, "assistant", reply)
 
+        # 8️⃣ risposta finale
         return {"text": reply}
+
     except Exception:
-        return {"text": "Errore durante OCR. Riprova tra poco."}
+        return {"text": "Errore durante l’analisi OCR. Riprova tra poco."}
