@@ -15,10 +15,10 @@ from pydantic import BaseModel
 # =========================
 # CONFIG (ENV)
 # =========================
-MODEL = os.getenv("MODEL", "openai/gpt-oss-20b").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
 
-MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile").strip()
+MODEL = os.getenv("MODEL", "openai/gpt-oss-20b").strip()
 SQLITE_PATH = os.getenv("SQLITE_PATH", "data.sqlite3").strip()
 
 HF_VISION_MODEL = os.getenv(
