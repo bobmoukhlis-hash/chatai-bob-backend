@@ -163,16 +163,19 @@ def chat(req: ChatReq) -> Dict[str, str]:
 
     client_id = (req.client_id or "").strip() or "client_anon"
     user_text = (req.message or "").strip()
+
     if not user_text:
         return {"text": "Scrivi un messaggio e rispondo subito."}
 
     history = load_history(client_id)
 
-    messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-        try:
+    try:
         res = groq_client.chat.completions.create(
             model=MODEL,
             messages=messages,
@@ -180,7 +183,9 @@ def chat(req: ChatReq) -> Dict[str, str]:
             max_tokens=800,
         )
 
-        reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere ora."
+        reply = (
+            res.choices[0].message.content or ""
+        ).strip() or "Non riesco a rispondere ora."
 
         save_msg(client_id, "user", user_text)
         save_msg(client_id, "assistant", reply)
