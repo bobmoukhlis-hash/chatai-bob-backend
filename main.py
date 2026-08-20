@@ -172,20 +172,22 @@ def chat(req: ChatReq) -> Dict[str, str]:
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-    try:
+        try:
         res = groq_client.chat.completions.create(
             model=MODEL,
             messages=messages,
             temperature=0.7,
             max_tokens=800,
         )
+
         reply = (res.choices[0].message.content or "").strip() or "Non riesco a rispondere ora."
 
         save_msg(client_id, "user", user_text)
         save_msg(client_id, "assistant", reply)
 
         return {"text": reply}
-        except Exception as e:
+
+    except Exception as e:
         print(f"ERRORE GROQ: {type(e).__name__}: {e}")
         return {"text": "Errore temporaneo. Riprova."}
 
