@@ -292,5 +292,6 @@ async def ocr_photo(
         # 8️⃣ risposta finale
         return {"text": reply}
 
-    except Exception:
-        return {"text": "Errore durante l’analisi OCR. Riprova tra poco."}
+        except Exception as e:
+        print("ERRORE GROQ /chat:", repr(e), flush=True)
+        return {"text": "Errore temporaneo. Riprova."}
