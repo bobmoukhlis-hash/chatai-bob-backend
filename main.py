@@ -185,9 +185,9 @@ def chat(req: ChatReq) -> Dict[str, str]:
         save_msg(client_id, "assistant", reply)
 
         return {"text": reply}
-    except Exception:
+        except Exception as e:
+        print(f"ERRORE GROQ: {type(e).__name__}: {e}")
         return {"text": "Errore temporaneo. Riprova."}
-
 
 # =========================
 # CLEAR
