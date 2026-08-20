@@ -296,8 +296,9 @@ async def ocr_photo(
         save_msg(client_id, "user", f"[OCR] {user_question}")
         save_msg(client_id, "assistant", reply)
 
-        # 8️⃣ risposta finale
+                # 8️⃣ risposta finale
         return {"text": reply}
 
-            except Exception:
-    return {"text": "Errore durante l’analisi OCR. Riprova tra poco."}
+    except Exception as e:
+        print(f"ERRORE OCR: {type(e).__name__}: {e}")
+        return {"text": "Errore durante l’analisi OCR. Riprova tra poco."}
