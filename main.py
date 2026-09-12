@@ -1,5 +1,5 @@
 # ============================================================
-# ChatAI Bob Backend V2
+# ChatAI Bob Backend V2.1
 # FastAPI + Groq + Hugging Face OCR
 #
 # Compatibile con:
@@ -8,8 +8,11 @@
 #   POST /ocr_photo
 #   GET  /health
 #
-# MODEL consigliato:
+# MODEL:
 #   openai/gpt-oss-20b
+#
+# FIX:
+#   Riduzione cronologia per evitare errore Groq 413 / TPM
 # ============================================================
 
 from __future__ import annotations
@@ -33,7 +36,6 @@ from pydantic import BaseModel
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
 
-# Manteniamo il modello gratuito che stai usando
 MODEL = os.getenv(
     "MODEL",
     "openai/gpt-oss-20b"
@@ -60,76 +62,65 @@ HF_TIMEOUT = int(
 
 
 # ============================================================
-# SYSTEM PROMPTS
+# LIMITI CHAT
+# ============================================================
+
+# Manteniamo pochissima cronologia per restare
+# molto sotto il limite TPM di Groq.
+
+MAX_HISTORY_MESSAGES = 4
+MAX_HISTORY_CHARS = 1200
+MAX_USER_CHARS = 4000
+MAX_SYSTEM_CHARS = 1800
+MAX_REPLY_TOKENS = 500
+
+
+# ============================================================
+# SYSTEM PROMPT
 # ============================================================
 
 SYSTEM_PROMPT = """
 Sei ChatAI Bob, un assistente AI professionale, amichevole e utile.
 
-Rispondi in italiano quando l'utente scrive in italiano.
-Puoi aiutare normalmente con:
+Rispondi nella lingua usata dall'utente.
 
-- programmazione
-- sviluppo di siti web
-- sviluppo di app
-- Android
-- Python
-- JavaScript
-- HTML e CSS
-- API e backend
-- database
-- blockchain
-- criptovalute
-- token
-- smart contract
-- wallet
-- Web3
-- app di mining
-- simulatori di mining
-- sistemi di ricompense
-- dashboard crypto
-- progettazione di applicazioni blockchain
-
-Quando l'utente chiede di creare un'app di mining crypto,
-puoi aiutare con architettura, codice, database, API, interfaccia,
-calcolo delle ricompense, sicurezza, anti-cheat e simulazione.
-
-Non inventare informazioni tecniche.
-Se una cosa non è certa, dichiaralo chiaramente.
+Aiuta con programmazione, siti web, app, Android, Python,
+JavaScript, HTML, CSS, API, backend, database, blockchain,
+crypto, token, smart contract, wallet, Web3 e simulatori di mining.
 
 Dai risposte pratiche e comprensibili.
 Quando serve codice, fornisci codice completo e utilizzabile.
 
+Non inventare informazioni tecniche.
+Se non sei sicuro, dichiaralo chiaramente.
+
 Non rifiutare una normale domanda tecnica solo perché contiene
-le parole crypto, blockchain, token o mining.
+parole come crypto, blockchain, token o mining.
 Valuta il contenuto reale della richiesta.
 """.strip()
 
 
 VISION_PROMPT = """
-Sei ChatAI Bob e devi aiutare l'utente a capire una FOTO
-partendo dalla descrizione disponibile.
-
-Non inventare dettagli che non sono visibili o non sono presenti
-nella descrizione.
-Se qualcosa non è leggibile o non è sicuro, dichiaralo chiaramente.
+Sei ChatAI Bob.
+Aiuta l'utente a capire una foto partendo dalla descrizione disponibile.
+Non inventare dettagli non visibili.
+Se qualcosa non è sicuro o leggibile, dichiaralo.
 """.strip()
 
 
 OCR_PROMPT = """
-Sei ChatAI Bob e devi aiutare l'utente a capire il TESTO
-letto da una fotografia tramite OCR.
+Sei ChatAI Bob.
+Aiuta l'utente a capire il testo letto da una fotografia tramite OCR.
 
-Spiega il testo in modo chiaro e semplice.
-Puoi tradurlo, riassumerlo o spiegare cosa significa.
+Puoi tradurlo, riassumerlo o spiegarlo.
 
-Se il testo OCR è incompleto, confuso o contiene errori,
+Se il testo OCR è incompleto o contiene errori,
 dillo chiaramente e non inventare le parti mancanti.
 """.strip()
 
 
 # ============================================================
-# CLIENTS
+# CLIENT GROQ
 # ============================================================
 
 groq_client = (
@@ -137,6 +128,11 @@ groq_client = (
     if GROQ_API_KEY
     else None
 )
+
+
+# ============================================================
+# HUGGING FACE
+# ============================================================
 
 HF_HEADERS = (
     {"Authorization": f"Bearer {HF_API_KEY}"}
@@ -154,6 +150,7 @@ def now_ts() -> int:
 
 
 def db_connect() -> sqlite3.Connection:
+
     conn = sqlite3.connect(
         SQLITE_PATH,
         check_same_thread=False
@@ -183,6 +180,10 @@ def db_connect() -> sqlite3.Connection:
 DB = db_connect()
 
 
+# ============================================================
+# SALVA MESSAGGIO
+# ============================================================
+
 def save_msg(
     client_id: str,
     role: str,
@@ -206,9 +207,13 @@ def save_msg(
     DB.commit()
 
 
+# ============================================================
+# CARICA CRONOLOGIA RIDOTTA
+# ============================================================
+
 def load_history(
     client_id: str,
-    limit: int = 12
+    limit: int = MAX_HISTORY_MESSAGES
 ) -> List[Dict[str, str]]:
 
     rows = DB.execute(
@@ -231,6 +236,21 @@ def load_history(
 
     for role, content in rows:
 
+        clean_content = str(
+            content or ""
+        ).strip()
+
+        # Limita la dimensione di ogni messaggio storico.
+        if len(clean_content) > MAX_HISTORY_CHARS:
+
+            clean_content = (
+                clean_content[:MAX_HISTORY_CHARS]
+                + "\n[contenuto precedente abbreviato]"
+            )
+
+        if not clean_content:
+            continue
+
         out.append(
             {
                 "role": (
@@ -238,12 +258,16 @@ def load_history(
                     if role == "user"
                     else "assistant"
                 ),
-                "content": str(content)
+                "content": clean_content
             }
         )
 
     return out
 
+
+# ============================================================
+# CANCELLA CRONOLOGIA
+# ============================================================
 
 def clear_history(
     client_id: str
@@ -266,7 +290,7 @@ def clear_history(
 
 app = FastAPI(
     title="ChatAI Bob Backend",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 
@@ -305,7 +329,9 @@ def health() -> Dict[str, Any]:
         "model": MODEL,
         "vision_model": HF_VISION_MODEL,
         "ocr_model": HF_OCR_MODEL,
-        "version": "2.0.0"
+        "version": "2.1.0",
+        "history_limit": MAX_HISTORY_MESSAGES,
+        "max_reply_tokens": MAX_REPLY_TOKENS
     }
 
 
@@ -314,6 +340,7 @@ def health() -> Dict[str, Any]:
 # ============================================================
 
 class ChatReq(BaseModel):
+
     message: str
     client_id: str
 
@@ -328,7 +355,7 @@ def chat(
 ) -> Dict[str, str]:
 
     # --------------------------------------------------------
-    # Controllo Groq
+    # CONTROLLO GROQ
     # --------------------------------------------------------
 
     if not groq_client:
@@ -340,13 +367,18 @@ def chat(
 
 
     # --------------------------------------------------------
-    # Dati utente
+    # CLIENT
     # --------------------------------------------------------
 
     client_id = (
         (req.client_id or "").strip()
         or "client_anon"
     )
+
+
+    # --------------------------------------------------------
+    # MESSAGGIO UTENTE
+    # --------------------------------------------------------
 
     user_text = (
         (req.message or "").strip()
@@ -362,27 +394,52 @@ def chat(
 
 
     # --------------------------------------------------------
-    # Cronologia
+    # LIMITE MESSAGGIO
+    # --------------------------------------------------------
+
+    if len(user_text) > MAX_USER_CHARS:
+
+        user_text = (
+            user_text[:MAX_USER_CHARS]
+            + "\n[Messaggio abbreviato]"
+        )
+
+
+    # --------------------------------------------------------
+    # CRONOLOGIA RIDOTTA
     # --------------------------------------------------------
 
     history = load_history(
         client_id,
-        limit=12
+        limit=MAX_HISTORY_MESSAGES
     )
 
 
     # --------------------------------------------------------
-    # Messaggi
+    # SYSTEM PROMPT LIMITATO
+    # --------------------------------------------------------
+
+    system_content = SYSTEM_PROMPT[
+        :MAX_SYSTEM_CHARS
+    ]
+
+
+    # --------------------------------------------------------
+    # MESSAGGI GROQ
     # --------------------------------------------------------
 
     messages: List[Dict[str, str]] = [
+
         {
             "role": "system",
-            "content": SYSTEM_PROMPT
+            "content": system_content
         }
+
     ]
 
+
     messages.extend(history)
+
 
     messages.append(
         {
@@ -396,39 +453,54 @@ def chat(
     # DEBUG
     # --------------------------------------------------------
 
+    total_chars = sum(
+        len(str(item.get("content", "")))
+        for item in messages
+    )
+
+
     print(
-        f"CHATAI BOB V2 | MODEL={MODEL}"
+        f"CHATAI BOB V2.1 | MODEL={MODEL}"
     )
 
     print(
-        f"CHATAI BOB V2 | CLIENT={client_id}"
+        f"CHATAI BOB V2.1 | CLIENT={client_id}"
     )
 
     print(
-        f"CHATAI BOB V2 | MESSAGE={user_text[:300]}"
+        f"CHATAI BOB V2.1 | HISTORY={len(history)}"
+    )
+
+    print(
+        f"CHATAI BOB V2.1 | TOTAL_CHARS={total_chars}"
+    )
+
+    print(
+        f"CHATAI BOB V2.1 | MESSAGE={user_text[:300]}"
     )
 
 
     # --------------------------------------------------------
     # GROQ
-    #
-    # IMPORTANTE:
-    # Non definiamo tool/function.
-    # Non definiamo tool_choice.
     # --------------------------------------------------------
 
     try:
 
         res = groq_client.chat.completions.create(
+
             model=MODEL,
+
             messages=messages,
+
             temperature=0.7,
-            max_tokens=800
+
+            max_tokens=MAX_REPLY_TOKENS
+
         )
 
 
         # ----------------------------------------------------
-        # Risposta
+        # RISPOSTA
         # ----------------------------------------------------
 
         reply = (
@@ -446,11 +518,11 @@ def chat(
 
 
         # ----------------------------------------------------
-        # LOG RISPOSTA
+        # LOG
         # ----------------------------------------------------
 
         print(
-            f"CHATAI BOB V2 | REPLY="
+            f"CHATAI BOB V2.1 | REPLY="
             f"{reply[:500]}"
         )
 
@@ -472,6 +544,10 @@ def chat(
         )
 
 
+        # ----------------------------------------------------
+        # RISPOSTA
+        # ----------------------------------------------------
+
         return {
             "text": reply
         }
@@ -479,19 +555,11 @@ def chat(
 
     except Exception as e:
 
-        # ----------------------------------------------------
-        # LOG COMPLETO SOLO SERVER
-        # ----------------------------------------------------
-
         print(
-            "ERRORE GROQ V2: "
+            "ERRORE GROQ V2.1: "
             f"{type(e).__name__}: {e}"
         )
 
-
-        # ----------------------------------------------------
-        # RISPOSTA PUBBLICA
-        # ----------------------------------------------------
 
         return {
             "text":
@@ -505,6 +573,7 @@ def chat(
 # ============================================================
 
 class ClearReq(BaseModel):
+
     client_id: str
 
 
@@ -546,11 +615,14 @@ def hf_ocr_image(
     try:
 
         response = requests.post(
+
             (
                 "https://api-inference.huggingface.co/"
                 f"models/{HF_OCR_MODEL}"
             ),
+
             headers=HF_HEADERS,
+
             files={
                 "file": (
                     "image.png",
@@ -558,6 +630,7 @@ def hf_ocr_image(
                     "application/octet-stream"
                 )
             },
+
             timeout=HF_TIMEOUT
         )
 
@@ -576,7 +649,7 @@ def hf_ocr_image(
 
 
     # --------------------------------------------------------
-    # Status HTTP
+    # STATUS HTTP
     # --------------------------------------------------------
 
     if response.status_code != 200:
@@ -613,7 +686,7 @@ def hf_ocr_image(
 
 
     # --------------------------------------------------------
-    # Estrazione testo
+    # TESTO
     # --------------------------------------------------------
 
     text = ""
@@ -673,13 +746,17 @@ def hf_ocr_image(
 
 @app.post("/ocr_photo")
 async def ocr_photo(
+
     file: UploadFile = File(...),
+
     question: str = Form(""),
+
     client_id: str = Form("client_anon")
+
 ):
 
     # --------------------------------------------------------
-    # Controllo AI
+    # CONTROLLO AI
     # --------------------------------------------------------
 
     if not groq_client:
@@ -691,7 +768,7 @@ async def ocr_photo(
 
 
     # --------------------------------------------------------
-    # Leggo file una sola volta
+    # FILE
     # --------------------------------------------------------
 
     try:
@@ -736,7 +813,7 @@ async def ocr_photo(
 
 
     # --------------------------------------------------------
-    # Dati
+    # CLIENT
     # --------------------------------------------------------
 
     client_id = (
@@ -744,14 +821,24 @@ async def ocr_photo(
         or "client_anon"
     )
 
+
     user_question = (
         (question or "").strip()
         or "Cosa c'è scritto?"
     )
 
 
+    # Limitiamo anche OCR per sicurezza.
+    ocr_text = str(
+        ocr_text or ""
+    )[:4000]
+
+
+    user_question = user_question[:1000]
+
+
     # --------------------------------------------------------
-    # Prompt OCR
+    # PROMPT OCR
     # --------------------------------------------------------
 
     messages = [
@@ -776,16 +863,21 @@ async def ocr_photo(
 
 
     # --------------------------------------------------------
-    # Groq OCR
+    # GROQ OCR
     # --------------------------------------------------------
 
     try:
 
         res = groq_client.chat.completions.create(
+
             model=MODEL,
+
             messages=messages,
+
             temperature=0.3,
-            max_tokens=600
+
+            max_tokens=400
+
         )
 
 
@@ -804,7 +896,7 @@ async def ocr_photo(
 
 
         # ----------------------------------------------------
-        # Salvataggio storico
+        # SALVA STORICO
         # ----------------------------------------------------
 
         save_msg(
@@ -821,7 +913,7 @@ async def ocr_photo(
 
 
         print(
-            "CHATAI BOB V2 | OCR OK"
+            "CHATAI BOB V2.1 | OCR OK"
         )
 
 
@@ -833,7 +925,7 @@ async def ocr_photo(
     except Exception as e:
 
         print(
-            "ERRORE OCR GROQ V2: "
+            "ERRORE OCR GROQ V2.1: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -846,7 +938,7 @@ async def ocr_photo(
 
 
 # ============================================================
-# STARTUP INFO
+# STARTUP
 # ============================================================
 
 @app.on_event("startup")
@@ -857,7 +949,7 @@ def startup_event():
     )
 
     print(
-        "      ChatAI Bob Backend V2 AVVIATO"
+        "      ChatAI Bob Backend V2.1 AVVIATO"
     )
 
     print(
@@ -880,6 +972,16 @@ def startup_event():
     print(
         f"      HuggingFace API: "
         f"{'OK' if HF_API_KEY else 'MISSING'}"
+    )
+
+    print(
+        f"      History: "
+        f"{MAX_HISTORY_MESSAGES} messaggi"
+    )
+
+    print(
+        f"      Max reply: "
+        f"{MAX_REPLY_TOKENS} token"
     )
 
     print(
