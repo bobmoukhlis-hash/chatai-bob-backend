@@ -738,7 +738,41 @@ def hf_ocr_image(
         text,
         None
     )
+# =====================================================
+# FEEDBACK
+# =====================================================
 
+from pydantic import BaseModel
+
+
+class FeedbackRequest(BaseModel):
+    client_id: str
+    message: str
+    feedback: str
+
+
+@app.post("/feedback")
+async def feedback(data: FeedbackRequest):
+
+    feedback = data.feedback.lower().strip()
+
+    if feedback not in ["like", "dislike"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Feedback non valido"
+        )
+
+    print(
+        f"[FEEDBACK] "
+        f"CLIENT_ID={data.client_id} "
+        f"TYPE={feedback} "
+        f"MESSAGE={data.message[:200]}"
+    )
+
+    return {
+        "ok": True,
+        "feedback": feedback
+    }
 
 # ============================================================
 # OCR PHOTO
