@@ -393,13 +393,14 @@ def supabase_create_client(
             timeout=10
         )
 
-        if response.status_code not in (200, 201):
-            print(
-                "Supabase create client error:",
-                response.status_code,
-                response.text
-            )
-            return 0
+        print(
+    "SUPABASE CREATE:",
+    response.status_code,
+    response.text
+)
+
+if response.status_code not in (200, 201):
+    return 0
 
         data = response.json()
 
