@@ -365,12 +365,13 @@ def supabase_get_credits(
             e
         )
 
-        return 0
+                return 0
 
 
-def supabase_create_client(
-    client_id: str
-) -> int:
+def supabase_use_credits(
+    client_id: str,
+    amount: int
+):
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         return 0
