@@ -347,6 +347,11 @@ def supabase_get_credits(
         )
 
         if response.status_code != 200:
+            print(
+                "Supabase get credits error:",
+                response.status_code,
+                response.text
+            )
             return 0
 
         data = response.json()
@@ -365,13 +370,12 @@ def supabase_get_credits(
             e
         )
 
-                return 0
+        return 0
 
 
-def supabase_use_credits(
-    client_id: str,
-    amount: int
-):
+def supabase_create_client(
+    client_id: str
+) -> int:
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         return 0
@@ -417,6 +421,9 @@ def supabase_use_credits(
         )
 
         return 0
+
+
+def supabase_use_credits(
     client_id: str,
     amount: int
 ):
@@ -445,18 +452,19 @@ def supabase_use_credits(
                 "client_id": f"eq.{client_id}"
             },
             json={
-                "credits": new_balance,
-                "updated_at": "now()"
+                "credits": new_balance
             },
             timeout=10
         )
 
         if response.status_code not in (200, 204):
+
             print(
                 "Supabase use credits error:",
                 response.status_code,
                 response.text
             )
+
             return False, current
 
         return True, new_balance
@@ -497,18 +505,19 @@ def supabase_add_credits(
                 "client_id": f"eq.{client_id}"
             },
             json={
-                "credits": new_balance,
-                "updated_at": "now()"
+                "credits": new_balance
             },
             timeout=10
         )
 
         if response.status_code not in (200, 204):
+
             print(
                 "Supabase add credits error:",
                 response.status_code,
                 response.text
             )
+
             return False, current
 
         return True, new_balance
@@ -521,6 +530,7 @@ def supabase_add_credits(
         )
 
         return False, 0
+
 
 # ============================================================
 # FASTAPI
