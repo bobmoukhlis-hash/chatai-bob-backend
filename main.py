@@ -381,10 +381,7 @@ def supabase_create_client(
             f"{SUPABASE_URL}/rest/v1/bob_credits",
             headers={
                 **SUPABASE_HEADERS,
-                "Prefer": (
-                    "resolution=merge-duplicates,"
-                    "return=representation"
-                )
+                "Prefer": "return=representation"
             },
             json={
                 "client_id": client_id,
@@ -394,13 +391,13 @@ def supabase_create_client(
         )
 
         print(
-    "SUPABASE CREATE:",
-    response.status_code,
-    response.text
-)
+            "SUPABASE CREATE:",
+            response.status_code,
+            response.text
+        )
 
-if response.status_code not in (200, 201):
-    return 0
+        if response.status_code not in (200, 201):
+            return 0
 
         data = response.json()
 
@@ -419,9 +416,6 @@ if response.status_code not in (200, 201):
         )
 
         return 0
-
-
-def supabase_use_credits(
     client_id: str,
     amount: int
 ):
