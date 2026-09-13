@@ -1,4 +1,221 @@
 # ============================================================
+# SUPABASE CREDIT FUNCTIONS
+# ============================================================
+
+def supabase_get_credits(client_id: str) -> int:
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return 0
+
+    try:
+
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers=SUPABASE_HEADERS,
+            params={
+                "client_id": f"eq.{client_id}",
+                "select": "credits"
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(
+                f"SUPABASE GET CREDITS ERROR: "
+                f"{response.status_code} "
+                f"{response.text[:300]}"
+            )
+            return 0
+
+        data = response.json()
+
+        if not data:
+            return 0
+
+        return int(
+            data[0].get("credits", 0)
+        )
+
+    except Exception as e:
+
+        print(
+            f"SUPABASE GET CREDITS EXCEPTION: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return 0
+
+
+def supabase_create_client(
+    client_id: str
+) -> int:
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return 0
+
+    try:
+
+        response = requests.post(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers={
+                **SUPABASE_HEADERS,
+                "Prefer": "resolution=merge-duplicates,return=representation"
+            },
+            json={
+                "client_id": client_id,
+                "credits": 100
+            },
+            timeout=15
+        )
+
+        if response.status_code not in [200, 201]:
+
+            print(
+                f"SUPABASE CREATE CREDIT ERROR: "
+                f"{response.status_code} "
+                f"{response.text[:300]}"
+            )
+
+            return 0
+
+        data = response.json()
+
+        if isinstance(data, list) and data:
+
+            return int(
+                data[0].get("credits", 100)
+            )
+
+        return 100
+
+    except Exception as e:
+
+        print(
+            f"SUPABASE CREATE CREDIT EXCEPTION: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return 0
+
+
+def supabase_use_credits(
+    client_id: str,
+    amount: int
+) -> Tuple[bool, int]:
+
+    current = supabase_get_credits(
+        client_id
+    )
+
+    if current < amount:
+
+        return (
+            False,
+            current
+        )
+
+    new_balance = current - amount
+
+    try:
+
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers=SUPABASE_HEADERS,
+            params={
+                "client_id": f"eq.{client_id}"
+            },
+            json={
+                "credits": new_balance
+            },
+            timeout=15
+        )
+
+        if response.status_code not in [200, 204]:
+
+            print(
+                f"SUPABASE USE CREDIT ERROR: "
+                f"{response.status_code} "
+                f"{response.text[:300]}"
+            )
+
+            return (
+                False,
+                current
+            )
+
+        return (
+            True,
+            new_balance
+        )
+
+    except Exception as e:
+
+        print(
+            f"SUPABASE USE CREDIT EXCEPTION: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return (
+            False,
+            current
+        )
+
+
+def supabase_add_credits(
+    client_id: str,
+    amount: int
+) -> Tuple[bool, int]:
+
+    current = supabase_get_credits(
+        client_id
+    )
+
+    new_balance = current + amount
+
+    try:
+
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers=SUPABASE_HEADERS,
+            params={
+                "client_id": f"eq.{client_id}"
+            },
+            json={
+                "credits": new_balance
+            },
+            timeout=15
+        )
+
+        if response.status_code not in [200, 204]:
+
+            print(
+                f"SUPABASE ADD CREDIT ERROR: "
+                f"{response.status_code} "
+                f"{response.text[:300]}"
+            )
+
+            return (
+                False,
+                current
+            )
+
+        return (
+            True,
+            new_balance
+        )
+
+    except Exception as e:
+
+        print(
+            f"SUPABASE ADD CREDIT EXCEPTION: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return (
+            False,
+            current
+        )
+# ============================================================
 # ChatAI Bob Backend V2.1
 # FastAPI + Groq + Hugging Face OCR
 #
@@ -35,7 +252,25 @@ from pydantic import BaseModel
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
+# ============================================================
+# SUPABASE CREDITS
+# ============================================================
 
+SUPABASE_URL = os.getenv(
+    "SUPABASE_URL",
+    ""
+).strip()
+
+SUPABASE_SERVICE_ROLE_KEY = os.getenv(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    ""
+).strip()
+
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    "Content-Type": "application/json"
+}
 MODEL = os.getenv(
     "MODEL",
     "openai/gpt-oss-20b"
@@ -59,7 +294,25 @@ HF_OCR_MODEL = os.getenv(
 HF_TIMEOUT = int(
     (os.getenv("HF_TIMEOUT", "60") or "60").strip()
 )
+# ============================================================
+# SUPABASE CREDITS
+# ============================================================
 
+SUPABASE_URL = os.getenv(
+    "SUPABASE_URL",
+    ""
+).strip()
+
+SUPABASE_SERVICE_ROLE_KEY = os.getenv(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    ""
+).strip()
+
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    "Content-Type": "application/json"
+}
 
 # ============================================================
 # LIMITI CHAT
@@ -282,7 +535,208 @@ def clear_history(
     )
 
     DB.commit()
+# ============================================================
+# SUPABASE CREDITS FUNCTIONS
+# ============================================================
 
+def supabase_get_credits(
+    client_id: str
+) -> int:
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return 0
+
+    try:
+
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers=SUPABASE_HEADERS,
+            params={
+                "client_id": f"eq.{client_id}",
+                "select": "credits"
+            },
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return 0
+
+        data = response.json()
+
+        if not data:
+            return 0
+
+        return int(
+            data[0].get("credits", 0)
+        )
+
+    except Exception as e:
+
+        print(
+            "Supabase get credits error:",
+            e
+        )
+
+        return 0
+
+
+def supabase_create_client(
+    client_id: str
+) -> int:
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return 0
+
+    try:
+
+        response = requests.post(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers={
+                **SUPABASE_HEADERS,
+                "Prefer": (
+                    "resolution=merge-duplicates,"
+                    "return=representation"
+                )
+            },
+            json={
+                "client_id": client_id,
+                "credits": 100
+            },
+            timeout=10
+        )
+
+        if response.status_code not in (200, 201):
+            print(
+                "Supabase create client error:",
+                response.status_code,
+                response.text
+            )
+            return 0
+
+        data = response.json()
+
+        if not data:
+            return 0
+
+        return int(
+            data[0].get("credits", 100)
+        )
+
+    except Exception as e:
+
+        print(
+            "Supabase create client error:",
+            e
+        )
+
+        return 0
+
+
+def supabase_use_credits(
+    client_id: str,
+    amount: int
+):
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False, 0
+
+    try:
+
+        current = supabase_get_credits(
+            client_id
+        )
+
+        if current < amount:
+            return False, current
+
+        new_balance = current - amount
+
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers={
+                **SUPABASE_HEADERS,
+                "Prefer": "return=representation"
+            },
+            params={
+                "client_id": f"eq.{client_id}"
+            },
+            json={
+                "credits": new_balance,
+                "updated_at": "now()"
+            },
+            timeout=10
+        )
+
+        if response.status_code not in (200, 204):
+            print(
+                "Supabase use credits error:",
+                response.status_code,
+                response.text
+            )
+            return False, current
+
+        return True, new_balance
+
+    except Exception as e:
+
+        print(
+            "Supabase use credits error:",
+            e
+        )
+
+        return False, 0
+
+
+def supabase_add_credits(
+    client_id: str,
+    amount: int
+):
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False, 0
+
+    try:
+
+        current = supabase_get_credits(
+            client_id
+        )
+
+        new_balance = current + amount
+
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/bob_credits",
+            headers={
+                **SUPABASE_HEADERS,
+                "Prefer": "return=representation"
+            },
+            params={
+                "client_id": f"eq.{client_id}"
+            },
+            json={
+                "credits": new_balance,
+                "updated_at": "now()"
+            },
+            timeout=10
+        )
+
+        if response.status_code not in (200, 204):
+            print(
+                "Supabase add credits error:",
+                response.status_code,
+                response.text
+            )
+            return False, current
+
+        return True, new_balance
+
+    except Exception as e:
+
+        print(
+            "Supabase add credits error:",
+            e
+        )
+
+        return False, 0
 
 # ============================================================
 # FASTAPI
@@ -333,7 +787,118 @@ def health() -> Dict[str, Any]:
         "history_limit": MAX_HISTORY_MESSAGES,
         "max_reply_tokens": MAX_REPLY_TOKENS
     }
+# ============================================================
+# CREDITS API
+# ============================================================
 
+class CreditsReq(BaseModel):
+    client_id: str
+
+
+class CreditsChangeReq(BaseModel):
+    client_id: str
+    amount: int
+
+
+@app.post("/credits")
+def credits(
+    req: CreditsReq
+) -> Dict[str, Any]:
+
+    client_id = (
+        (req.client_id or "").strip()
+        or "client_anon"
+    )
+
+    current = supabase_get_credits(
+        client_id
+    )
+
+    if current == 0:
+
+        current = supabase_create_client(
+            client_id
+        )
+
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "credits": current
+    }
+
+
+@app.post("/credits/use")
+def credits_use(
+    req: CreditsChangeReq
+) -> Dict[str, Any]:
+
+    client_id = (
+        (req.client_id or "").strip()
+        or "client_anon"
+    )
+
+    amount = int(req.amount)
+
+    if amount <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Importo crediti non valido"
+        )
+
+    success, balance = supabase_use_credits(
+        client_id,
+        amount
+    )
+
+    if not success:
+
+        raise HTTPException(
+            status_code=402,
+            detail="Crediti insufficienti"
+        )
+
+    return {
+        "ok": True,
+        "credits": balance
+    }
+
+
+@app.post("/credits/add")
+def credits_add(
+    req: CreditsChangeReq
+) -> Dict[str, Any]:
+
+    client_id = (
+        (req.client_id or "").strip()
+        or "client_anon"
+    )
+
+    amount = int(req.amount)
+
+    if amount <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Importo crediti non valido"
+        )
+
+    success, balance = supabase_add_credits(
+        client_id,
+        amount
+    )
+
+    if not success:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Impossibile aggiungere crediti"
+        )
+
+    return {
+        "ok": True,
+        "credits": balance
+    }
 
 # ============================================================
 # CHAT REQUEST
