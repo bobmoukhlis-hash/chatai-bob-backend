@@ -1493,7 +1493,7 @@ async def generate_image(
 
 
 # ============================================================
-# MODIFICA FOTO CON AI
+# MODIFICA IMMAGINI
 # ============================================================
 
 @app.post("/edit_image")
@@ -1523,10 +1523,6 @@ async def edit_image(
 
         prompt = prompt[:1000]
 
-    # --------------------------------------------------------
-    # LETTURA FOTO
-    # --------------------------------------------------------
-
     try:
 
         image_bytes = await file.read()
@@ -1551,10 +1547,6 @@ async def edit_image(
             detail="Il file della foto è vuoto."
         )
 
-    # --------------------------------------------------------
-    # LIMITE 12 MB
-    # --------------------------------------------------------
-
     if len(image_bytes) > 12 * 1024 * 1024:
 
         raise HTTPException(
@@ -1563,7 +1555,7 @@ async def edit_image(
         )
 
     # --------------------------------------------------------
-    # CREDITI
+    # COSTO MODIFICA
     # --------------------------------------------------------
 
     success, balance = supabase_use_credits(
@@ -1596,10 +1588,6 @@ async def edit_image(
             f"EDIT IMAGE | INPUT_BYTES={len(image_bytes)}"
         )
 
-        # ----------------------------------------------------
-        # HUGGING FACE
-        # ----------------------------------------------------
-
         client = InferenceClient(
             api_key=HF_API_KEY
         )
@@ -1610,10 +1598,6 @@ async def edit_image(
             model=HF_EDIT_IMAGE_MODEL
         )
 
-        # ----------------------------------------------------
-        # CONVERTI IN PNG
-        # ----------------------------------------------------
-
         import io
 
         buffer = io.BytesIO()
@@ -1623,25 +1607,24 @@ async def edit_image(
             format="PNG"
         )
 
-        output_bytes = buffer.getvalue()
+        output_bytes = (
+            buffer.getvalue()
+        )
 
         print(
             f"EDIT IMAGE | OK | BYTES={len(output_bytes)}"
         )
 
-        # ----------------------------------------------------
-        # RISPOSTA
-        # ----------------------------------------------------
-
         return Response(
             content=output_bytes,
             media_type="image/png",
             headers={
-                "X-Bob-Credits": str(balance)
+                "X-Bob-Credits":
+                    str(balance)
             }
         )
 
-        except Exception as e:
+    except Exception as e:
 
         print(
             "ERRORE MODIFICA IMMAGINE: "
