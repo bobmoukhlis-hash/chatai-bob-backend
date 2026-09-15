@@ -1337,20 +1337,39 @@ async def ocr_photo(
             "Riprova tra poco."
         }
 # ============================================================
-# GENERAZIONE IMMAGINI
+# GENERAZIONE + MODIFICA IMMAGINI
 # ============================================================
 
 from huggingface_hub import InferenceClient
 from fastapi.responses import Response
 
 
+# ============================================================
+# COSTI
+# ============================================================
+
 IMAGE_COST = 15
+EDIT_IMAGE_COST = 20
+
+
+# ============================================================
+# MODELLI
+# ============================================================
 
 HF_IMAGE_MODEL = os.getenv(
     "HF_IMAGE_MODEL",
     "black-forest-labs/FLUX.1-dev"
 ).strip()
 
+HF_EDIT_IMAGE_MODEL = os.getenv(
+    "HF_EDIT_IMAGE_MODEL",
+    "Qwen/Qwen-Image-Edit"
+).strip()
+
+
+# ============================================================
+# CREA IMMAGINE DA TESTO
+# ============================================================
 
 @app.post("/generate_image")
 async def generate_image(
@@ -1368,16 +1387,18 @@ async def generate_image(
     )
 
     if not prompt:
+
         raise HTTPException(
             status_code=400,
             detail="Inserisci una descrizione dell'immagine."
         )
 
     if len(prompt) > 1000:
+
         prompt = prompt[:1000]
 
     # --------------------------------------------------------
-    # 1. CONSUMA 15 CREDITI
+    # CREDITI
     # --------------------------------------------------------
 
     success, balance = supabase_use_credits(
@@ -1406,10 +1427,6 @@ async def generate_image(
             f"IMAGE | PROMPT={prompt[:300]}"
         )
 
-        # ----------------------------------------------------
-        # 2. HUGGING FACE
-        # ----------------------------------------------------
-
         client = InferenceClient(
             api_key=HF_API_KEY
         )
@@ -1420,7 +1437,7 @@ async def generate_image(
         )
 
         # ----------------------------------------------------
-        # 3. CONVERTI IMMAGINE
+        # PNG
         # ----------------------------------------------------
 
         import io
@@ -1454,7 +1471,7 @@ async def generate_image(
         )
 
         # ----------------------------------------------------
-        # RIMBORSO AUTOMATICO DEI 15 CREDITI
+        # RIMBORSO
         # ----------------------------------------------------
 
         refund_ok, refund_balance = (
@@ -1474,13 +1491,191 @@ async def generate_image(
             detail="Generazione immagine non riuscita."
         )
 
+
+# ============================================================
+# MODIFICA FOTO CON AI
+# ============================================================
+
+@app.post("/edit_image")
+async def edit_image(
+    file: UploadFile = File(...),
+    prompt: str = Form(...),
+    client_id: str = Form("client_anon")
+):
+
+    client_id = (
+        (client_id or "").strip()
+        or "client_anon"
+    )
+
+    prompt = (
+        (prompt or "").strip()
+    )
+
+    if not prompt:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Scrivi cosa vuoi modificare nella foto."
+        )
+
+    if len(prompt) > 1000:
+
+        prompt = prompt[:1000]
+
+    # --------------------------------------------------------
+    # LETTURA FOTO
+    # --------------------------------------------------------
+
+    try:
+
+        image_bytes = await file.read()
+
+    except Exception as e:
+
+        print(
+            "EDIT IMAGE | ERRORE LETTURA:",
+            type(e).__name__,
+            e
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail="Impossibile leggere la foto."
+        )
+
+    if not image_bytes:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Il file della foto è vuoto."
+        )
+
+    # --------------------------------------------------------
+    # LIMITE 12 MB
+    # --------------------------------------------------------
+
+    if len(image_bytes) > 12 * 1024 * 1024:
+
+        raise HTTPException(
+            status_code=413,
+            detail="La foto è troppo grande. Massimo 12 MB."
+        )
+
+    # --------------------------------------------------------
+    # CREDITI
+    # --------------------------------------------------------
+
+    success, balance = supabase_use_credits(
+        client_id,
+        EDIT_IMAGE_COST
+    )
+
+    if not success:
+
+        raise HTTPException(
+            status_code=402,
+            detail="Crediti insufficienti"
+        )
+
+    try:
+
+        print(
+            f"EDIT IMAGE | CLIENT={client_id}"
+        )
+
+        print(
+            f"EDIT IMAGE | MODEL={HF_EDIT_IMAGE_MODEL}"
+        )
+
+        print(
+            f"EDIT IMAGE | PROMPT={prompt[:300]}"
+        )
+
+        print(
+            f"EDIT IMAGE | INPUT_BYTES={len(image_bytes)}"
+        )
+
+        # ----------------------------------------------------
+        # HUGGING FACE
+        # ----------------------------------------------------
+
+        client = InferenceClient(
+            api_key=HF_API_KEY
+        )
+
+        image = client.image_to_image(
+            image=image_bytes,
+            prompt=prompt,
+            model=HF_EDIT_IMAGE_MODEL
+        )
+
+        # ----------------------------------------------------
+        # CONVERTI IN PNG
+        # ----------------------------------------------------
+
+        import io
+
+        buffer = io.BytesIO()
+
+        image.save(
+            buffer,
+            format="PNG"
+        )
+
+        output_bytes = buffer.getvalue()
+
+        print(
+            f"EDIT IMAGE | OK | BYTES={len(output_bytes)}"
+        )
+
+        # ----------------------------------------------------
+        # RISPOSTA
+        # ----------------------------------------------------
+
+        return Response(
+            content=output_bytes,
+            media_type="image/png",
+            headers={
+                "X-Bob-Credits": str(balance)
+            }
+        )
+
+    except Exception as e:
+
+        print(
+            "ERRORE MODIFICA IMMAGINE: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        # ----------------------------------------------------
+        # RIMBORSO AUTOMATICO
+        # ----------------------------------------------------
+
+        refund_ok, refund_balance = (
+            supabase_add_credits(
+                client_id,
+                EDIT_IMAGE_COST
+            )
+        )
+
+                print(
+            f"EDIT IMAGE | REFUND="
+            f"{'OK' if refund_ok else 'FAILED'}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Modifica immagine non riuscita."
+        )
+
+
 # ============================================================
 # STARTUP
 # ============================================================
 
 @app.on_event("startup")
 def startup_event():
-
     print(
         "=========================================="
     )
