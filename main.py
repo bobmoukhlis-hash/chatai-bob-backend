@@ -1641,7 +1641,7 @@ async def edit_image(
             }
         )
 
-    except Exception as e:
+        except Exception as e:
 
         print(
             "ERRORE MODIFICA IMMAGINE: "
@@ -1659,7 +1659,7 @@ async def edit_image(
             )
         )
 
-                print(
+        print(
             f"EDIT IMAGE | REFUND="
             f"{'OK' if refund_ok else 'FAILED'}"
         )
