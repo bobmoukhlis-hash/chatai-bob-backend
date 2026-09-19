@@ -703,7 +703,7 @@ def pvideo_test() -> Dict[str, Any]:
                     "application/json",
 
                 "Prefer":
-                    "wait=120"
+    "wait=60"
             },
 
             json={
