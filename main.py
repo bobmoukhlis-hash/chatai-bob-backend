@@ -609,12 +609,10 @@ def luma_test() -> Dict[str, Any]:
     try:
 
         response = requests.get(
-            LUMA_API_URL,
+            "https://api.lumalabs.ai/dream-machine/v1/generations",
             headers={
-                "Authorization":
-                    f"Bearer {LUMA_API_KEY}",
-                "Accept":
-                    "application/json"
+                "Authorization": f"Bearer {LUMA_API_KEY}",
+                "Accept": "application/json"
             },
             params={
                 "limit": 1
@@ -628,17 +626,14 @@ def luma_test() -> Dict[str, Any]:
             response.text[:500]
         )
 
-        if response.status_code == 200:
-
-            return {
-                "ok": True,
-                "luma": "connected"
-            }
-
         return {
-            "ok": False,
-            "luma": "error",
+            "ok": response.status_code == 200,
             "status": response.status_code,
+            "luma": (
+                "connected"
+                if response.status_code == 200
+                else "error"
+            ),
             "detail": response.text[:300]
         }
 
@@ -652,7 +647,8 @@ def luma_test() -> Dict[str, Any]:
 
         return {
             "ok": False,
-            "luma": "connection_error"
+            "luma": "connection_error",
+            "detail": str(e)
         }
 # ============================================================
 # CREDITS API
