@@ -661,7 +661,301 @@ def replicate_test() -> Dict[str, Any]:
             "ok": False,
             "replicate": "connection_error",
             "detail": str(e)
-        } 
+        }
+        # ============================================================
+# P-VIDEO GENERAZIONE CON CREDITI BOB
+# ============================================================
+
+PVIDEO_COSTS = {
+    5: 50,
+    10: 100,
+    20: 200
+}
+
+
+@app.post("/generate_video")
+def generate_video(
+    client_id: str,
+    prompt: str,
+    duration: int = 5
+) -> Dict[str, Any]:
+
+    replicate_token = os.getenv(
+        "REPLICATE_API_TOKEN",
+        ""
+    ).strip()
+
+    if not replicate_token:
+
+        return {
+            "ok": False,
+            "error": "REPLICATE_API_TOKEN non configurato"
+        }
+
+
+    # Controllo durata
+
+    if duration not in PVIDEO_COSTS:
+
+        return {
+            "ok": False,
+            "error": "Durata non valida. Usa 5, 10 oppure 20 secondi."
+        }
+
+
+    cost = PVIDEO_COSTS[duration]
+
+
+    # Controllo saldo
+
+    current_credits = supabase_get_credits(
+        client_id
+    )
+
+    if current_credits < cost:
+
+        return {
+            "ok": False,
+            "error": "Crediti Bob insufficienti",
+            "required": cost,
+            "credits": current_credits
+        }
+
+
+    # ========================================================
+    # SCALA I CREDITI
+    # ========================================================
+
+    credits_used, new_balance = supabase_use_credits(
+        client_id,
+        cost
+    )
+
+    if not credits_used:
+
+        return {
+            "ok": False,
+            "error": "Impossibile utilizzare i crediti",
+            "credits": new_balance
+        }
+
+
+    try:
+
+        print(
+            "P-VIDEO: generazione avviata",
+            "client_id=",
+            client_id,
+            "duration=",
+            duration,
+            "cost=",
+            cost
+        )
+
+
+        response = requests.post(
+
+            "https://api.replicate.com/v1/models/"
+            "prunaai/p-video/predictions",
+
+            headers={
+
+                "Authorization":
+                    f"Bearer {replicate_token}",
+
+                "Content-Type":
+                    "application/json",
+
+                "Accept":
+                    "application/json",
+
+                "Prefer":
+                    "wait=60"
+            },
+
+            json={
+
+                "input": {
+
+                    "prompt":
+                        prompt,
+
+                    "duration":
+                        duration,
+
+                    "resolution":
+                        "720p",
+
+                    "aspect_ratio":
+                        "16:9",
+
+                    "fps":
+                        24,
+
+                    "draft":
+                        False,
+
+                    "save_audio":
+                        True,
+
+                    "prompt_upsampling":
+                        True
+                }
+            },
+
+            timeout=75
+        )
+
+
+        print(
+            "P-VIDEO:",
+            response.status_code,
+            response.text[:1000]
+        )
+
+
+        if response.status_code not in (
+            200,
+            201
+        ):
+
+            # =================================================
+            # RIMBORSO
+            # =================================================
+
+            refunded, refund_balance = supabase_add_credits(
+                client_id,
+                cost
+            )
+
+            return {
+
+                "ok":
+                    False,
+
+                "error":
+                    "Errore P-Video",
+
+                "status":
+                    response.status_code,
+
+                "detail":
+                    response.text[:1000],
+
+                "refunded":
+                    refunded,
+
+                "credits":
+                    refund_balance
+            }
+
+
+        data = response.json()
+
+        video_url = data.get(
+            "output"
+        )
+
+
+        if isinstance(
+            video_url,
+            list
+        ):
+
+            video_url = (
+                video_url[0]
+                if video_url
+                else None
+            )
+
+
+        if not video_url:
+
+            # =================================================
+            # RIMBORSO SE NON ABBIAMO IL VIDEO
+            # =================================================
+
+            refunded, refund_balance = supabase_add_credits(
+                client_id,
+                cost
+            )
+
+            return {
+
+                "ok":
+                    False,
+
+                "error":
+                    "P-Video non ha restituito il video",
+
+                "refunded":
+                    refunded,
+
+                "credits":
+                    refund_balance,
+
+                "replicate":
+                    data
+            }
+
+
+        print(
+            "P-VIDEO: VIDEO OK"
+        )
+
+
+        return {
+
+            "ok":
+                True,
+
+            "video_url":
+                video_url,
+
+            "duration":
+                duration,
+
+            "cost":
+                cost,
+
+            "credits":
+                new_balance
+        }
+
+
+    except Exception as e:
+
+        print(
+            "P-VIDEO ERROR:",
+            type(e).__name__,
+            e
+        )
+
+
+        # =====================================================
+        # RIMBORSO
+        # =====================================================
+
+        refunded, refund_balance = supabase_add_credits(
+            client_id,
+            cost
+        )
+
+
+        return {
+
+            "ok":
+                False,
+
+            "error":
+                str(e),
+
+            "refunded":
+                refunded,
+
+            "credits":
+                refund_balance
+        }
 # ============================================================
 # P-VIDEO TEST
 # ============================================================
