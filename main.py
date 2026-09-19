@@ -662,6 +662,168 @@ def replicate_test() -> Dict[str, Any]:
             "replicate": "connection_error",
             "detail": str(e)
         } 
+# ============================================================
+# P-VIDEO TEST
+# ============================================================
+
+@app.post("/pvideo-test")
+def pvideo_test() -> Dict[str, Any]:
+
+    replicate_token = os.getenv(
+        "REPLICATE_API_TOKEN",
+        ""
+    ).strip()
+
+    if not replicate_token:
+        return {
+            "ok": False,
+            "replicate": "missing",
+            "detail": "REPLICATE_API_TOKEN non configurato"
+        }
+
+    try:
+
+        print(
+            "P-VIDEO TEST: avvio generazione"
+        )
+
+        response = requests.post(
+
+            "https://api.replicate.com/v1/models/"
+            "prunaai/p-video/predictions",
+
+            headers={
+                "Authorization":
+                    f"Bearer {replicate_token}",
+
+                "Content-Type":
+                    "application/json",
+
+                "Accept":
+                    "application/json",
+
+                "Prefer":
+                    "wait=120"
+            },
+
+            json={
+                "input": {
+
+                    "prompt":
+                        "A realistic orange cat running "
+                        "on a beautiful beach at sunset, "
+                        "cinematic lighting, natural movement",
+
+                    "duration":
+                        5,
+
+                    "resolution":
+                        "720p",
+
+                    "aspect_ratio":
+                        "16:9",
+
+                    "fps":
+                        24,
+
+                    "draft":
+                        False,
+
+                    "save_audio":
+                        True,
+
+                    "prompt_upsampling":
+                        True
+                }
+            },
+
+            timeout=180
+        )
+
+        print(
+            "P-VIDEO TEST:",
+            response.status_code,
+            response.text[:1000]
+        )
+
+        if response.status_code not in (
+            200,
+            201
+        ):
+
+            return {
+                "ok": False,
+                "pvideo": "error",
+                "status": response.status_code,
+                "detail": response.text[:1000]
+            }
+
+        data = response.json()
+
+        video_url = data.get(
+            "output"
+        )
+
+        if isinstance(
+            video_url,
+            list
+        ):
+
+            video_url = (
+                video_url[0]
+                if video_url
+                else None
+            )
+
+        if not video_url:
+
+            return {
+                "ok": False,
+                "pvideo": "completed_without_url",
+                "detail": data
+            }
+
+        print(
+            "P-VIDEO TEST: VIDEO OK"
+        )
+
+        return {
+
+            "ok":
+                True,
+
+            "pvideo":
+                "completed",
+
+            "video_url":
+                video_url,
+
+            "duration":
+                5,
+
+            "resolution":
+                "720p"
+        }
+
+    except Exception as e:
+
+        print(
+            "P-VIDEO TEST ERROR:",
+            type(e).__name__,
+            e
+        )
+
+        return {
+
+            "ok":
+                False,
+
+            "pvideo":
+                "connection_error",
+
+            "detail":
+                str(e)
+        }
    # ============================================================
 # LUMA TEST - AGENTS API
 # ============================================================
