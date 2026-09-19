@@ -42,7 +42,19 @@ HF_API_KEY = os.getenv(
     "HF_API_KEY",
     ""
 ).strip()
+# ============================================================
+# LUMA API
+# ============================================================
 
+LUMA_API_KEY = os.getenv(
+    "LUMA_API_KEY",
+    ""
+).strip()
+
+LUMA_API_URL = (
+    "https://api.lumalabs.ai/"
+    "dream-machine/v1/generations"
+)
 
 # ============================================================
 # SUPABASE CREDITS
@@ -581,6 +593,67 @@ def health() -> Dict[str, Any]:
         "history_limit": MAX_HISTORY_MESSAGES,
         "max_reply_tokens": MAX_REPLY_TOKENS
     }
+    # ============================================================
+# LUMA TEST
+# ============================================================
+
+@app.get("/luma-test")
+def luma_test() -> Dict[str, Any]:
+
+    if not LUMA_API_KEY:
+        return {
+            "ok": False,
+            "luma": "missing"
+        }
+
+    try:
+
+        response = requests.get(
+            LUMA_API_URL,
+            headers={
+                "Authorization":
+                    f"Bearer {LUMA_API_KEY}",
+                "Accept":
+                    "application/json"
+            },
+            params={
+                "limit": 1
+            },
+            timeout=15
+        )
+
+        print(
+            "LUMA TEST:",
+            response.status_code,
+            response.text[:500]
+        )
+
+        if response.status_code == 200:
+
+            return {
+                "ok": True,
+                "luma": "connected"
+            }
+
+        return {
+            "ok": False,
+            "luma": "error",
+            "status": response.status_code,
+            "detail": response.text[:300]
+        }
+
+    except Exception as e:
+
+        print(
+            "LUMA TEST ERROR:",
+            type(e).__name__,
+            e
+        )
+
+        return {
+            "ok": False,
+            "luma": "connection_error"
+        }
 # ============================================================
 # CREDITS API
 # ============================================================
