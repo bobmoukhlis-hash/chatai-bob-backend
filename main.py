@@ -594,6 +594,75 @@ def health() -> Dict[str, Any]:
         "max_reply_tokens": MAX_REPLY_TOKENS
     }
    # ============================================================
+# REPLICATE TEST
+# ============================================================
+
+@app.get("/replicate-test")
+def replicate_test() -> Dict[str, Any]:
+
+    replicate_token = os.getenv(
+        "REPLICATE_API_TOKEN",
+        ""
+    ).strip()
+
+    if not replicate_token:
+        return {
+            "ok": False,
+            "replicate": "missing",
+            "detail": "REPLICATE_API_TOKEN non configurato"
+        }
+
+    try:
+
+        response = requests.get(
+            "https://api.replicate.com/v1/account",
+            headers={
+                "Authorization":
+                    f"Bearer {replicate_token}",
+                "Accept":
+                    "application/json"
+            },
+            timeout=15
+        )
+
+        print(
+            "REPLICATE TEST:",
+            response.status_code,
+            response.text[:500]
+        )
+
+        if response.status_code == 200:
+
+            data = response.json()
+
+            return {
+                "ok": True,
+                "replicate": "authenticated",
+                "username": data.get("username"),
+                "name": data.get("name")
+            }
+
+        return {
+            "ok": False,
+            "replicate": "not_authenticated",
+            "status": response.status_code,
+            "detail": response.text[:500]
+        }
+
+    except Exception as e:
+
+        print(
+            "REPLICATE TEST ERROR:",
+            type(e).__name__,
+            e
+        )
+
+        return {
+            "ok": False,
+            "replicate": "connection_error",
+            "detail": str(e)
+        } 
+   # ============================================================
 # LUMA TEST - AGENTS API
 # ============================================================
 
