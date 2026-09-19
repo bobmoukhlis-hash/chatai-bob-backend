@@ -660,6 +660,612 @@ def luma_test() -> Dict[str, Any]:
             "luma": "connection_error",
             "detail": str(e)
         }
+       # ============================================================
+# LUMA VIDEO GENERATION
+# ============================================================
+
+LUMA_VIDEO_COST = 60
+
+LUMA_AGENTS_URL = (
+    "https://agents.lumalabs.ai/v1/generations"
+)
+
+
+class GenerateVideoRequest(BaseModel):
+
+    client_id: str
+    prompt: str
+
+
+@app.post("/generate_video")
+def generate_video(
+    req: GenerateVideoRequest
+) -> Dict[str, Any]:
+
+    client_id = (
+        (req.client_id or "").strip()
+        or "client_anon"
+    )
+
+    prompt = (
+        (req.prompt or "").strip()
+    )
+
+    # --------------------------------------------------------
+    # VALIDAZIONE
+    # --------------------------------------------------------
+
+    if not prompt:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Scrivi cosa vuoi vedere nel video"
+        )
+
+    luma_key = os.getenv(
+        "LUMA_AGENTS_API_KEY",
+        ""
+    ).strip()
+
+    if not luma_key:
+
+        raise HTTPException(
+            status_code=500,
+            detail="LUMA_AGENTS_API_KEY non configurata"
+        )
+
+    # --------------------------------------------------------
+    # SCALA 60 CREDITI
+    # --------------------------------------------------------
+
+    success, balance = supabase_use_credits(
+        client_id,
+        LUMA_VIDEO_COST
+    )
+
+    if not success:
+
+        raise HTTPException(
+            status_code=402,
+            detail="Crediti insufficienti"
+        )
+
+    print(
+        "LUMA VIDEO: "
+        f"{LUMA_VIDEO_COST} crediti scalati "
+        f"da {client_id}. "
+        f"Saldo: {balance}"
+    )
+
+    try:
+
+        # ----------------------------------------------------
+        # CREA VIDEO LUMA
+        # ----------------------------------------------------
+
+        response = requests.post(
+
+            LUMA_AGENTS_URL,
+
+            headers={
+                "Authorization":
+                    f"Bearer {luma_key}",
+
+                "Content-Type":
+                    "application/json",
+
+                "Accept":
+                    "application/json"
+            },
+
+            json={
+
+                "model":
+                    "ray-3.2",
+
+                "type":
+                    "video",
+
+                "prompt":
+                    prompt,
+
+                "aspect_ratio":
+                    "16:9",
+
+                "video": {
+
+                    "resolution":
+                        "720p",
+
+                    "duration":
+                        "5s"
+                },
+
+                "user_id":
+                    client_id
+            },
+
+            timeout=30
+        )
+
+        print(
+            "LUMA CREATE:",
+            response.status_code,
+            response.text[:1000]
+        )
+
+        # ----------------------------------------------------
+        # ERRORE LUMA
+        # ----------------------------------------------------
+
+        if response.status_code not in (
+            200,
+            201
+        ):
+
+            raise Exception(
+                response.text[:500]
+            )
+
+        data = response.json()
+
+        generation_id = data.get(
+            "id"
+        )
+
+        if not generation_id:
+
+            generation = data.get(
+                "generation",
+                {}
+            )
+
+            generation_id = generation.get(
+                "id"
+            )
+
+        if not generation_id:
+
+            raise Exception(
+                "ID generazione Luma non trovato"
+            )
+
+        print(
+            "LUMA GENERATION ID:",
+            generation_id
+        )
+
+        # ----------------------------------------------------
+        # POLLING
+        # ----------------------------------------------------
+
+        for attempt in range(60):
+
+            time.sleep(5)
+
+            status_response = requests.get(
+
+                LUMA_AGENTS_URL
+                + "/"
+                + generation_id,
+
+                headers={
+                    "Authorization":
+                        f"Bearer {luma_key}",
+
+                    "Accept":
+                        "application/json"
+                },
+
+                timeout=30
+            )
+
+            print(
+                "LUMA STATUS:",
+                attempt + 1,
+                status_response.status_code
+            )
+
+            if status_response.status_code != 200:
+
+                continue
+
+            status_data = (
+                status_response.json()
+            )
+
+            state = status_data.get(
+                "state"
+            )
+
+            print(
+                "LUMA STATE:",
+                state
+            )
+
+            # ------------------------------------------------
+            # COMPLETATO
+            # ------------------------------------------------
+
+            if state == "completed":
+
+                video_url = None
+
+                assets = (
+                    status_data.get(
+                        "assets"
+                    )
+                )
+
+                if isinstance(
+                    assets,
+                    dict
+                ):
+
+                    video_url = assets.get(
+                        "video"
+                    )
+
+                if not video_url:
+
+                    output = (
+                        status_data.get(
+                            "output"
+                        )
+                    )
+
+                    if isinstance(
+                        output,
+                        dict
+                    ):
+
+                        video_url = (
+                            output.get(
+                                "video"
+                            )
+                            or output.get(
+                                "url"
+                            )
+                        )
+
+                    elif isinstance(
+                        output,
+                        list
+                    ):
+
+                        for item in output:
+
+                            if isinstance(
+                                item,
+                                dict
+                            ):
+
+                                if item.get(
+                                    "url"
+                                ):
+
+                                    video_url = (
+                                        item["url"]
+                                    )
+
+                                    break
+
+                if not video_url:
+
+                    raise Exception(
+                        "Video completato ma URL non trovato"
+                    )
+
+                return {
+
+                    "ok":
+                        True,
+
+                    "status":
+                        "completed",
+
+                    "generation_id":
+                        generation_id,
+
+                    "video_url":
+                        video_url,
+
+                    "credits":
+                        balance
+                }
+
+            # ------------------------------------------------
+            # FALLITO
+            # ------------------------------------------------
+
+            if state == "failed":
+
+                raise Exception(
+                    status_data.get(
+                        "failure_reason",
+                        "Generazione Luma fallita"
+                    )
+                )
+
+        # ----------------------------------------------------
+        # TIMEOUT
+        # ----------------------------------------------------
+
+        raise Exception(
+            "Timeout durante la generazione video"
+        )
+
+    except Exception as e:
+
+        print(
+            "LUMA VIDEO ERROR:",
+            type(e).__name__,
+            e
+        )
+
+        # ----------------------------------------------------
+        # RIMBORSO 60 CREDITI
+        # ----------------------------------------------------
+
+        refund_ok, refund_balance = (
+            supabase_add_credits(
+                client_id,
+                LUMA_VIDEO_COST
+            )
+        )
+
+        print(
+            "LUMA VIDEO REFUND:",
+            refund_ok,
+            refund_balance
+        )
+
+        return {
+
+            "ok":
+                False,
+
+            "status":
+                "failed",
+
+            "error":
+                "Generazione video fallita",
+
+            "detail":
+                str(e)[:500],
+
+            "credits":
+                refund_balance
+        }
+
+    # --------------------------------------------------------
+    # CREA GENERAZIONE LUMA
+    # --------------------------------------------------------
+
+    try:
+
+        response = requests.post(
+            LUMA_AGENTS_URL,
+
+            headers={
+                "Authorization":
+                    f"Bearer {luma_key}",
+
+                "Content-Type":
+                    "application/json",
+
+                "Accept":
+                    "application/json"
+            },
+
+            json={
+                "model": "ray-3.2",
+
+                "type": "video",
+
+                "prompt": prompt,
+
+                "aspect_ratio": "16:9",
+
+                "video": {
+                    "resolution": "720p",
+                    "duration": "5s"
+                },
+
+                "user_id": client_id
+            },
+
+            timeout=30
+        )
+
+        print(
+            "LUMA CREATE:",
+            response.status_code,
+            response.text[:1000]
+        )
+
+        if response.status_code not in (
+            200,
+            201
+        ):
+
+            raise Exception(
+                response.text[:500]
+            )
+
+        generation = response.json().get(
+            "generation",
+            response.json()
+        )
+
+        generation_id = generation.get(
+            "id"
+        )
+
+        if not generation_id:
+            raise Exception(
+                "generation_id mancante"
+            )
+
+        # ----------------------------------------------------
+        # POLLING
+        # ----------------------------------------------------
+
+        for _ in range(60):
+
+            time.sleep(5)
+
+            status_response = requests.get(
+
+                LUMA_AGENTS_URL
+                + "/"
+                + generation_id,
+
+                headers={
+                    "Authorization":
+                        f"Bearer {luma_key}",
+
+                    "Accept":
+                        "application/json"
+                },
+
+                timeout=30
+            )
+
+            print(
+                "LUMA STATUS:",
+                status_response.status_code,
+                status_response.text[:500]
+            )
+
+            if status_response.status_code != 200:
+
+                continue
+
+            status_data = status_response.json()
+
+            state = status_data.get(
+                "state"
+            )
+
+            if state == "completed":
+
+                output = status_data.get(
+                    "output",
+                    []
+                )
+
+                video_url = None
+
+                if isinstance(output, list):
+
+                    for item in output:
+
+                        if isinstance(item, dict):
+
+                            url = item.get(
+                                "url"
+                            )
+
+                            if url:
+                                video_url = url
+                                break
+
+                if not video_url:
+
+                    raise Exception(
+                        "URL video non trovato"
+                    )
+
+                return {
+
+                    "ok": True,
+
+                    "video_url":
+                        video_url,
+
+                    "generation_id":
+                        generation_id,
+
+                    "credits":
+                        new_credits
+                }
+
+            if state == "failed":
+
+                raise Exception(
+                    status_data.get(
+                        "failure_reason",
+                        "Generazione Luma fallita"
+                    )
+                )
+
+        raise Exception(
+            "Timeout generazione Luma"
+        )
+
+    except Exception as e:
+
+        print(
+            "LUMA VIDEO ERROR:",
+            type(e).__name__,
+            e
+        )
+
+        # ----------------------------------------------------
+        # RIMBORSO CREDITI
+        # ----------------------------------------------------
+
+        try:
+
+            requests.patch(
+
+                f"{SUPABASE_URL}/rest/v1/bob_credits"
+                "?client_id=eq."
+                + requests.utils.quote(
+                    client_id,
+                    safe=""
+                ),
+
+                headers={
+                    **SUPABASE_HEADERS,
+                    "Prefer": "return=representation"
+                },
+
+                json={
+                    "credits":
+                        current_credits
+                },
+
+                timeout=15
+            )
+
+            print(
+                "LUMA VIDEO: "
+                "CREDITI RIMBORSATI"
+            )
+
+        except Exception as refund_error:
+
+            print(
+                "LUMA REFUND ERROR:",
+                type(refund_error).__name__,
+                refund_error
+            )
+
+        return {
+
+            "ok": False,
+
+            "error":
+                "Generazione video fallita",
+
+            "detail":
+                str(e)[:500],
+
+            "credits":
+                current_credits
+        } 
 # ============================================================
 # CREDITS API
 # ============================================================
