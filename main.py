@@ -593,54 +593,64 @@ def health() -> Dict[str, Any]:
         "history_limit": MAX_HISTORY_MESSAGES,
         "max_reply_tokens": MAX_REPLY_TOKENS
     }
-    # ============================================================
-# LUMA TEST
+   # ============================================================
+# LUMA TEST - AGENTS API
 # ============================================================
 
 @app.get("/luma-test")
 def luma_test() -> Dict[str, Any]:
 
-    if not LUMA_API_KEY:
+    luma_key = os.getenv(
+        "LUMA_AGENTS_API_KEY",
+        ""
+    ).strip()
+
+    if not luma_key:
         return {
             "ok": False,
-            "luma": "missing"
+            "luma": "missing",
+            "detail": "LUMA_AGENTS_API_KEY non configurata"
         }
 
     try:
 
-        response = requests.get(
-            "https://api.lumalabs.ai/dream-machine/v1/generations",
+        response = requests.post(
+            "https://agents.lumalabs.ai/v1/generations",
             headers={
-                "Authorization": f"Bearer {LUMA_API_KEY}",
+                "Authorization": f"Bearer {luma_key}",
+                "Content-Type": "application/json",
                 "Accept": "application/json"
             },
-            params={
-                "limit": 1
-            },
+            json={},
             timeout=15
         )
 
         print(
-            "LUMA TEST:",
+            "LUMA AGENTS TEST:",
             response.status_code,
             response.text[:500]
         )
 
         return {
-            "ok": response.status_code == 200,
+            "ok": response.status_code != 401
+            and response.status_code != 403,
+
             "status": response.status_code,
+
             "luma": (
-                "connected"
-                if response.status_code == 200
-                else "error"
+                "authenticated"
+                if response.status_code != 401
+                and response.status_code != 403
+                else "not_authenticated"
             ),
-            "detail": response.text[:300]
+
+            "detail": response.text[:500]
         }
 
     except Exception as e:
 
         print(
-            "LUMA TEST ERROR:",
+            "LUMA AGENTS TEST ERROR:",
             type(e).__name__,
             e
         )
